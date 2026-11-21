@@ -121,7 +121,9 @@ class KeyMonitor {
 
     // MARK: - Event handling
 
-    fileprivate func handleEvent(type: CGEventType, event: CGEvent) {
+    /// Called by the event-tap callback. Internal (not fileprivate) so the
+    /// self-test can feed synthetic events without creating a tap.
+    func handleEvent(type: CGEventType, event: CGEvent) {
         if !hasReceivedEvent {
             hasReceivedEvent = true
             log("KeyMonitor: first event received — Input Monitoring OK")

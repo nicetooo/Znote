@@ -17,3 +17,6 @@ docs/
 *.swp
 *~
 dist/
+
+# Python bytecode from selftest/
+__pycache__/

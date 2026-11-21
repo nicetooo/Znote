@@ -25,7 +25,12 @@ class AudioRecorder {
         let threshold = Settings.shared.silenceThreshold
         let minDuration = Settings.shared.minRecordingDuration
         log("Audio check: duration=\(String(format: "%.1f", duration))s, peak=\(String(format: "%.3f", peak)), threshold=\(String(format: "%.2f", threshold)), minDur=\(String(format: "%.1f", minDuration))s")
-        return duration >= minDuration && peak >= threshold
+        return AudioRecorder.isMeaningful(duration: duration, peak: peak, threshold: threshold, minDuration: minDuration)
+    }
+
+    /// The silence gate: long enough and loud enough to be worth transcribing.
+    static func isMeaningful(duration: TimeInterval, peak: Float, threshold: Float, minDuration: TimeInterval) -> Bool {
+        duration >= minDuration && peak >= threshold
     }
 
     /// Duration of the last recording in seconds

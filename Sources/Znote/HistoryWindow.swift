@@ -134,6 +134,8 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
     /// Active inline video player, retained so we can pause it when collapsing
     /// the row or closing the panel.
     private var activeVideoPlayer: AVPlayer?
+    /// Image preview shown beside the panel while the pointer is on a screenshot row.
+    private let hoverPreview = HistoryHoverPreview()
 
     private lazy var timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -186,6 +188,7 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
 
     func hideHistory() {
         removeKeyMonitor()
+        hoverPreview.hide()
         activeVideoPlayer?.pause()
         activeVideoPlayer = nil
         panel?.orderOut(nil)
@@ -199,6 +202,7 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
 
     func windowWillClose(_ n: Notification) {
         removeKeyMonitor()
+        hoverPreview.hide()
         activeVideoPlayer?.pause()
         activeVideoPlayer = nil
         panel = nil
@@ -298,7 +302,8 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         scroll.layer?.masksToBounds = true
         scroll.layer?.backgroundColor = NSColor(white: 0.13, alpha: 1.0).cgColor
 
-        let table = NSTableView()
+        let table = HoverTableView()
+        table.onHoverRow = { [weak self] row in self?.hoverChanged(row) }
         table.style = .plain
         table.rowSizeStyle = .custom
         // .regular keeps AppKit calling drawSelection on the row view; our DarkRowView
@@ -449,6 +454,7 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         records = HistoryStore.shared.fetch(query: query, typeFilter: filter)
         expandedRow = nil
         tableView?.reloadData()
+        (tableView as? HoverTableView)?.refreshHover()
         countLabel?.stringValue = L("history.count", records.count)
         emptyLabel?.isHidden = !records.isEmpty
         updateFolderButtonVisibility()
@@ -707,6 +713,9 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
             table.noteHeightOfRows(withIndexesChanged: rowsToUpdate)
         }
 
+        // The row under the pointer just expanded or collapsed.
+        (table as? HoverTableView)?.refreshHover()
+
         // Sync selection to expanded row (for visual highlight + copy/delete)
         if let exp = expandedRow {
             table.selectRowIndexes(IndexSet(integer: exp), byExtendingSelection: false)
@@ -770,6 +779,23 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
             HistoryStore.shared.deleteAll()
             reloadData()
         }
+    }
+
+    // MARK: - Hover Preview
+
+    /// Pointer moved onto `row` (nil: onto no row). Screenshot rows get a
+    /// floating preview beside the panel; the expanded row already shows its
+    /// image inline, so it doesn't.
+    private func hoverChanged(_ row: Int?) {
+        guard let row, row < records.count, row != expandedRow,
+              records[row].type == .screenshot,
+              let path = records[row].imagePath, FileManager.default.fileExists(atPath: path),
+              let panel, let table = tableView else {
+            hoverPreview.hide()
+            return
+        }
+        let rowInWindow = table.convert(table.rect(ofRow: row), to: nil)
+        hoverPreview.show(imagePath: path, beside: panel, rowRectOnScreen: panel.convertToScreen(rowInWindow))
     }
 
     // MARK: - Preview Image Helper

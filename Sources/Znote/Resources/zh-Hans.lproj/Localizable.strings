@@ -106,6 +106,8 @@
 /* ── Whisper 模型说明 ───────────────────────────────────── */
 "model.large_v3.note" = "质量最佳 · 多语言 · 标点完整 · ~1× 实时";
 "model.large_v3_turbo.note" = "~8× 速度 · 多语言 · 不支持翻译 · 标点较弱";
+"model.large_v3_compact.note" = "Large V3 压缩版 · 省磁盘 · 更慢、嘈杂时略差 · 支持翻译";
+"model.large_v3_turbo_compact.note" = "Turbo 压缩版 · 省磁盘 · 比 Turbo 慢 · 不支持翻译";
 "model.small.note" = "轻量 · 主要面向英语 · 中文准确度 ~25% WER";
 
 /* ── 下载进度 ───────────────────────────────────────────── */
@@ -116,3 +118,18 @@
 
 /* ── 翻译浮层 ───────────────────────────────────────────── */
 "translation.copy" = "复制";
+
+/* Screenshot annotation */
+"button.annotate" = "标注";
+"editor.tool.pen" = "画笔";
+"editor.tool.arrow" = "箭头";
+"editor.tool.rectangle" = "矩形";
+"editor.tool.ellipse" = "椭圆";
+"editor.tool.text" = "文字";
+"editor.tool.mosaic" = "马赛克";
+"editor.color" = "颜色";
+"editor.width" = "粗细";
+"editor.undo" = "撤销";
+"editor.redo" = "重做";
+"editor.cancel" = "放弃截图";
+"editor.done" = "完成并复制";

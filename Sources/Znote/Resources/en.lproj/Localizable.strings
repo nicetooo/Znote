@@ -109,6 +109,8 @@
 /* ── Whisper model notes ────────────────────────────────── */
 "model.large_v3.note" = "Best quality · multilingual · proper punctuation · ~1× realtime";
 "model.large_v3_turbo.note" = "~8× faster · multilingual · no translate · weaker punctuation";
+"model.large_v3_compact.note" = "Large V3, 1/3 the disk space · slower, less accurate in noise · supports translate";
+"model.large_v3_turbo_compact.note" = "Turbo, under half the disk space · slower than Turbo · no translate";
 "model.small.note" = "Lightweight · English-mainly · Chinese accuracy ~25% WER";
 
 /* ── Download progress ──────────────────────────────────── */
@@ -119,3 +121,18 @@
 
 /* ── Translation overlay ────────────────────────────────── */
 "translation.copy" = "Copy";
+
+/* Screenshot annotation */
+"button.annotate" = "Annotate";
+"editor.tool.pen" = "Pen";
+"editor.tool.arrow" = "Arrow";
+"editor.tool.rectangle" = "Rectangle";
+"editor.tool.ellipse" = "Ellipse";
+"editor.tool.text" = "Text";
+"editor.tool.mosaic" = "Mosaic";
+"editor.color" = "Color";
+"editor.width" = "Thickness";
+"editor.undo" = "Undo";
+"editor.redo" = "Redo";
+"editor.cancel" = "Discard screenshot";
+"editor.done" = "Done — copy to clipboard";

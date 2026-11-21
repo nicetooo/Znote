@@ -22,6 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingMode: RecordingMode = .transcribe
     private var regionSelector: RegionSelector!
     private var captureActionPicker: CaptureActionPicker!
+    private let screenshotEditor = ScreenshotEditor()
     private var screenRecorder: ScreenRecorder?
     private var recordingStopButton: RecordingStopButton?
     private var recordingStartedAt: Date?
@@ -393,7 +394,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Triggered by Right ⌥ double-tap. Flow:
     ///   1. Show RegionSelector — user drags out a rectangle.
     ///   2. On selection, show CaptureActionPicker near the rect.
-    ///   3. User picks Capture (screenshot) or Record (video, Phase 2).
+    ///   3. User picks Capture (screenshot), Annotate (screenshot, then the
+    ///      editor) or Record (video).
     private func takeScreenshot() {
         DispatchQueue.main.async {
             self.regionSelector.begin(
@@ -413,6 +415,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onCapture: { [weak self] in
                 self?.captureScreenshot(rect: rect)
             },
+            onEdit: { [weak self] in
+                self?.captureScreenshot(rect: rect, annotate: true)
+            },
             onRecord: { [weak self] in
                 self?.startScreenRecording(rect: rect)
             },
@@ -425,7 +430,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Take a PNG screenshot of `rect` (NSScreen / window coords, bottom-left origin).
     /// Uses `screencapture -R x,y,w,h` which expects top-left origin in primary-display
     /// pixel coords, so we convert.
-    private func captureScreenshot(rect: NSRect) {
+    private func captureScreenshot(rect: NSRect, annotate: Bool = false) {
         let timestamp = DateFormatter.screenshotTimestamp.string(from: Date())
         let filename = "screenshot-\(timestamp).png"
         let fileURL = screenshotsDirectory().appendingPathComponent(filename)
@@ -474,18 +479,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
 
                 DispatchQueue.main.async {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    if let image = NSImage(data: data) {
-                        pb.writeObjects([image])
+                    if annotate {
+                        self.annotateScreenshot(at: fileURL, original: data, rect: rect)
                     } else {
-                        pb.setData(data, forType: .png)
+                        self.finishScreenshot(data: data, fileURL: fileURL)
                     }
-                    log("Screenshot copied to clipboard (\(data.count) bytes)")
-                    HistoryStore.shared.addScreenshot(path: fileURL.path)
                 }
             }
         }
+    }
+
+    /// Put a finished screenshot on the clipboard and into History.
+    private func finishScreenshot(data: Data, fileURL: URL) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        if let image = NSImage(data: data) {
+            pb.writeObjects([image])
+        } else {
+            pb.setData(data, forType: .png)
+        }
+        log("Screenshot copied to clipboard (\(data.count) bytes)")
+        HistoryStore.shared.addScreenshot(path: fileURL.path)
+    }
+
+    /// Open the annotation editor over the region the screenshot came from.
+    /// Done → the flattened image replaces the file and is finished as usual.
+    /// Cancel → the screenshot is discarded entirely.
+    private func annotateScreenshot(at fileURL: URL, original: Data, rect: NSRect) {
+        guard let document = AnnotationDocument(contentsOf: fileURL) else {
+            // Can't edit it, but the capture itself succeeded — don't lose it.
+            log("annotateScreenshot: couldn't open \(fileURL.path) for editing, finishing unedited")
+            finishScreenshot(data: original, fileURL: fileURL)
+            return
+        }
+        screenshotEditor.open(
+            document: document, over: rect,
+            onDone: { [weak self] png in
+                do {
+                    try png.write(to: fileURL, options: .atomic)
+                    self?.finishScreenshot(data: png, fileURL: fileURL)
+                } catch {
+                    log("annotateScreenshot: couldn't save the annotated image (\(error)), keeping the original")
+                    self?.finishScreenshot(data: original, fileURL: fileURL)
+                }
+            },
+            onCancel: {
+                try? FileManager.default.removeItem(at: fileURL)
+                log("Annotation cancelled — screenshot discarded")
+            }
+        )
     }
 
     /// Returns the directory where screen recordings are saved.

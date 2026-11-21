@@ -81,7 +81,8 @@ class HistoryStore {
 
     private func openDatabase() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appDir = appSupport.appendingPathComponent("Znote")
+        // A self-test run works on its own database, never the user's history.
+        let appDir = SelfTest.request?.dir ?? appSupport.appendingPathComponent("Znote")
         try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
         let dbPath = appDir.appendingPathComponent("history.sqlite").path
 
@@ -192,9 +193,14 @@ class HistoryStore {
         var textParams: [String] = []
 
         if let q = query, !q.isEmpty {
-            conditions.append("(output_text LIKE ? OR input_text LIKE ?)")
-            textParams.append("%\(q)%")
-            textParams.append("%\(q)%")
+            // LIKE reads % and _ as wildcards; the user typed them as plain text.
+            let literal = q
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "%", with: "\\%")
+                .replacingOccurrences(of: "_", with: "\\_")
+            conditions.append("(output_text LIKE ? ESCAPE '\\' OR input_text LIKE ? ESCAPE '\\')")
+            textParams.append("%\(literal)%")
+            textParams.append("%\(literal)%")
         }
         if let type = typeFilter.historyType {
             conditions.append("type = ?")

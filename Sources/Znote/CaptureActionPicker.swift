@@ -1,12 +1,17 @@
 import AppKit
 
 /// Small floating panel shown after the user finishes selecting a region.
-/// Lets them pick: 📷 capture an image, 🎥 record video, or cancel.
+/// Lets them pick: 📷 capture an image, ✏️ capture and annotate it, 🎥 record
+/// video, or cancel.
 final class CaptureActionPicker {
+    /// 8 + 92 (capture) + 4 + 96 (annotate) + 4 + 78 (record) + 4 + 28 (cancel) + 8
+    static let width: CGFloat = 322
+
     private var panel: NSPanel?
     private var localKeyMonitor: Any?
 
     private var onCapture: (() -> Void)?
+    private var onEdit: (() -> Void)?
     private var onRecord: (() -> Void)?
     private var onCancel: (() -> Void)?
 
@@ -15,15 +20,17 @@ final class CaptureActionPicker {
     /// (bottom-left origin), the same coord system RegionSelector returns.
     func show(near selectionRect: NSRect,
               onCapture: @escaping () -> Void,
+              onEdit: @escaping () -> Void,
               onRecord: @escaping () -> Void,
               onCancel: @escaping () -> Void) {
         if panel != nil { return }
 
         self.onCapture = onCapture
+        self.onEdit = onEdit
         self.onRecord = onRecord
         self.onCancel = onCancel
 
-        let w: CGFloat = 220
+        let w: CGFloat = CaptureActionPicker.width
         let h: CGFloat = 66       // 52 for buttons + 14 for keyboard hint row
         let gap: CGFloat = 12
 
@@ -56,12 +63,16 @@ final class CaptureActionPicker {
 
         // Keyboard shortcuts:
         //   Return / Enter → Capture (default / primary action)
+        //   E              → Capture, then annotate
         //   R              → Record
         //   ESC            → Cancel
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             switch event.keyCode {
             case 36, 76:        // Return, numpad Enter
                 self?.handleCapture()
+                return nil
+            case 14:            // E
+                self?.handleEdit()
                 return nil
             case 15:            // R
                 self?.handleRecord()
@@ -82,6 +93,7 @@ final class CaptureActionPicker {
         panel?.orderOut(nil)
         panel = nil
         onCapture = nil
+        onEdit = nil
         onRecord = nil
         onCancel = nil
     }
@@ -90,6 +102,9 @@ final class CaptureActionPicker {
 
     fileprivate func handleCapture() {
         let cb = onCapture; dismiss(); cb?()
+    }
+    fileprivate func handleEdit() {
+        let cb = onEdit; dismiss(); cb?()
     }
     fileprivate func handleRecord() {
         let cb = onRecord; dismiss(); cb?()
@@ -100,7 +115,8 @@ final class CaptureActionPicker {
 
     // MARK: - UI
 
-    private func buildContent(width: CGFloat, height: CGFloat) -> NSView {
+    /// Internal (not private) so the self-test can render the layout.
+    func buildContent(width: CGFloat, height: CGFloat) -> NSView {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor(white: 0.10, alpha: 0.96).cgColor
@@ -120,13 +136,18 @@ final class CaptureActionPicker {
         captureBtn.onClick = { [weak self] in self?.handleCapture() }
         root.addSubview(captureBtn)
 
+        let editBtn = PickerButton(symbol: "pencil", title: L("button.annotate"), accent: false)
+        editBtn.frame = NSRect(x: 104, y: btnY, width: 96, height: 36)
+        editBtn.onClick = { [weak self] in self?.handleEdit() }
+        root.addSubview(editBtn)
+
         let recordBtn = PickerButton(symbol: "video.fill", title: L("button.record"), accent: false)
-        recordBtn.frame = NSRect(x: 104, y: btnY, width: 78, height: 36)
+        recordBtn.frame = NSRect(x: 204, y: btnY, width: 78, height: 36)
         recordBtn.onClick = { [weak self] in self?.handleRecord() }
         root.addSubview(recordBtn)
 
         let cancelBtn = PickerButton(symbol: "xmark", title: nil, accent: false, destructive: true)
-        cancelBtn.frame = NSRect(x: 186, y: btnY, width: 28, height: 36)
+        cancelBtn.frame = NSRect(x: 286, y: btnY, width: 28, height: 36)
         cancelBtn.onClick = { [weak self] in self?.handleCancel() }
         root.addSubview(cancelBtn)
 
@@ -134,6 +155,7 @@ final class CaptureActionPicker {
         // Enter uses ↵ (Unicode 'Return Symbol'), Record uses the letter R,
         // Cancel uses 'esc'.
         addHint("↵", under: captureBtn.frame, in: root, y: hintY)
+        addHint("E", under: editBtn.frame, in: root, y: hintY)
         addHint("R", under: recordBtn.frame, in: root, y: hintY)
         addHint("esc", under: cancelBtn.frame, in: root, y: hintY)
 

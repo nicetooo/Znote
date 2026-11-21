@@ -14,7 +14,11 @@ struct WhisperModelInfo {
 
 class Settings {
     static let shared = Settings()
-    private let defaults = UserDefaults.standard
+
+    /// Where preferences live. A self-test run gets a throwaway domain so it
+    /// never reads or writes the user's real settings.
+    static let store: UserDefaults = SelfTest.request == nil ? .standard : SelfTest.isolatedDefaults()
+    private let defaults = Settings.store
 
     // MARK: - Popular Whisper Models (WhisperKit CoreML format)
     //
@@ -33,10 +37,22 @@ class Settings {
                 note: L("model.large_v3.note")
             ),
             WhisperModelInfo(
+                name: "large-v3_947MB",
+                displayName: "Large V3 Compact",
+                size: "~950 MB",
+                note: L("model.large_v3_compact.note")
+            ),
+            WhisperModelInfo(
                 name: "large-v3-v20240930",
                 displayName: "Large V3 Turbo",
                 size: "~1.6 GB",
                 note: L("model.large_v3_turbo.note")
+            ),
+            WhisperModelInfo(
+                name: "large-v3-v20240930_626MB",
+                displayName: "Large V3 Turbo Compact",
+                size: "~630 MB",
+                note: L("model.large_v3_turbo_compact.note")
             ),
             WhisperModelInfo(
                 name: "small",
@@ -393,11 +409,11 @@ extension Settings {
         let sideKey = "hotkey.\(action.rawValue).side"
         let modKey = "hotkey.\(action.rawValue).modifier"
         let gestKey = "hotkey.\(action.rawValue).gesture"
-        let side = UserDefaults.standard.string(forKey: sideKey).flatMap(HotkeySide.init(rawValue:))
+        let side = Settings.store.string(forKey: sideKey).flatMap(HotkeySide.init(rawValue:))
             ?? action.defaultBinding.side
-        let modifier = UserDefaults.standard.string(forKey: modKey).flatMap(HotkeyModifier.init(rawValue:))
+        let modifier = Settings.store.string(forKey: modKey).flatMap(HotkeyModifier.init(rawValue:))
             ?? action.defaultBinding.modifier
-        let storedGesture = UserDefaults.standard.string(forKey: gestKey).flatMap(HotkeyGesture.init(rawValue:))
+        let storedGesture = Settings.store.string(forKey: gestKey).flatMap(HotkeyGesture.init(rawValue:))
         // Clamp to allowedGestures so an old/invalid stored value can't break the action.
         let gesture = (storedGesture.map { action.allowedGestures.contains($0) ? $0 : action.defaultGesture })
             ?? action.defaultGesture
@@ -405,9 +421,9 @@ extension Settings {
     }
 
     func setHotkeyBinding(_ binding: HotkeyBinding, for action: HotkeyAction) {
-        UserDefaults.standard.set(binding.side.rawValue, forKey: "hotkey.\(action.rawValue).side")
-        UserDefaults.standard.set(binding.modifier.rawValue, forKey: "hotkey.\(action.rawValue).modifier")
-        UserDefaults.standard.set(binding.gesture.rawValue, forKey: "hotkey.\(action.rawValue).gesture")
+        Settings.store.set(binding.side.rawValue, forKey: "hotkey.\(action.rawValue).side")
+        Settings.store.set(binding.modifier.rawValue, forKey: "hotkey.\(action.rawValue).modifier")
+        Settings.store.set(binding.gesture.rawValue, forKey: "hotkey.\(action.rawValue).gesture")
     }
 
     func resetHotkeys() {

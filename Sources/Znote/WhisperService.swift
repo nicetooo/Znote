@@ -9,6 +9,11 @@ class WhisperService {
     private var loadedModel: String = ""
     private(set) var isLoading = false
 
+    /// How many times a transcription was re-run with a forced language
+    /// because the auto-detected one wasn't among the user's languages.
+    /// Each retry doubles that transcription's time; the self-test watches it.
+    private(set) var languageRetryCount = 0
+
     /// Whether a model is loaded and ready for transcription
     var isModelReady: Bool { whisperKit != nil && !loadedModel.isEmpty }
 
@@ -114,6 +119,7 @@ class WhisperService {
                 if !isLanguageExpected(cleaned) {
                     if let retryLang = bestRetryLanguage() {
                         log("Whisper: language mismatch, retrying with forced '\(retryLang)'")
+                        languageRetryCount += 1
                         var retryOptions = options
                         retryOptions.language = retryLang
                         retryOptions.detectLanguage = false
@@ -126,7 +132,7 @@ class WhisperService {
             }
 
             var finalText = cleanupTranscription(rawText)
-            finalText = removeTrailingHallucinations(finalText)
+            finalText = HallucinationFilter.removeTrailing(from: finalText)
             if finalText.isEmpty {
                 log("Whisper: result empty after hallucination filtering, discarding")
                 return nil
@@ -275,84 +281,6 @@ class WhisperService {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-    }
-
-    // MARK: - Hallucination Filtering
-
-    /// Common Whisper hallucination phrases that appear on silence/trailing audio.
-    /// These are artifacts from YouTube training data endings.
-    private static let hallucinationPhrases: Set<String> = [
-        // "Thank you" family
-        "thank", "thank.", "thank!",
-        "thanks", "thanks.", "thanks!",
-        "thank you", "thank you.", "thank you!",
-        "thank you so much", "thank you so much.",
-        "thank you for watching", "thank you for watching.",
-        "thanks for watching", "thanks for watching.", "thanks for watching!",
-        "thanks a lot", "thanks a lot.",
-        // Subscribe / CTA
-        "like and subscribe", "like and subscribe.",
-        "subscribe", "subscribe.", "please subscribe",
-        // Sign-offs
-        "see you next time", "see you next time.",
-        "see you in the next video", "see you in the next video.",
-        "bye", "bye.", "bye bye", "bye bye.",
-        "goodbye", "goodbye.",
-        "the end", "the end.",
-        // Single-word fragments
-        "you", "you.",
-        "music",
-        "♪",
-        "...",
-        // Known auto-subtitle artifacts
-        "subtitles by the amara.org community",
-        "transcribed by https://otter.ai",
-    ]
-
-    /// Remove hallucination phrases from the end of transcription.
-    /// Works for both pure-hallucination results and trailing hallucinations.
-    private func removeTrailingHallucinations(_ text: String) -> String {
-        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        var changed = true
-
-        // Iteratively strip trailing hallucination phrases
-        while changed {
-            changed = false
-            let lower = result.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Check if the entire remaining text is a hallucination
-            if WhisperService.hallucinationPhrases.contains(lower) {
-                log("Whisper: filtered pure hallucination: \"\(result)\"")
-                return ""
-            }
-
-            // Check if text ends with a hallucination phrase
-            for phrase in WhisperService.hallucinationPhrases {
-                if lower.hasSuffix(phrase) {
-                    // Make sure it's a separate phrase (preceded by space/punctuation or is the whole string)
-                    let prefixEnd = result.index(result.endIndex, offsetBy: -phrase.count)
-                    if prefixEnd == result.startIndex {
-                        // Entire text is the hallucination
-                        log("Whisper: filtered pure hallucination: \"\(result)\"")
-                        return ""
-                    }
-                    let charBefore = result[result.index(before: prefixEnd)]
-                    if charBefore == " " || charBefore == "," || charBefore == "." ||
-                       charBefore == "!" || charBefore == "?" || charBefore == "。" ||
-                       charBefore == "，" || charBefore == "、" {
-                        let stripped = String(result[result.startIndex..<prefixEnd])
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .trimmingCharacters(in: CharacterSet(charactersIn: " ,，.。、"))
-                        log("Whisper: stripped trailing hallucination \"\(phrase)\" → \"\(stripped.suffix(30))\"")
-                        result = stripped
-                        changed = true
-                        break
-                    }
-                }
-            }
-        }
-
-        return result
     }
 
     // MARK: - Chinese Conversion
