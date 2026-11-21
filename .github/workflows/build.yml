@@ -24,6 +24,10 @@ jobs:
           cp .build/release/Znote Znote.app/Contents/MacOS/Znote
           cp Sources/Znote/Resources/Info.plist Znote.app/Contents/Info.plist
           cp Sources/Znote/Resources/Znote.icns Znote.app/Contents/Resources/Znote.icns
+          # Localized strings — without these every label shows its raw key.
+          for lproj in Sources/Znote/Resources/*.lproj; do
+            cp -R "$lproj" Znote.app/Contents/Resources/
+          done
 
       - name: Import Developer ID certificate
         if: ${{ env.BUILD_CERTIFICATE_BASE64 != '' }}
