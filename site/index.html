@@ -28,7 +28,7 @@
     <div class="cta-row">
       <a id="download-btn" class="btn primary btn-download" href="https://github.com/nicetooo/Znote/releases/latest/download/Znote.dmg" rel="noopener">
         <span class="btn-title">Download for macOS</span>
-        <span class="btn-sub" id="download-version">v0.6.0 · Apple Silicon</span>
+        <span class="btn-sub" id="download-version">v0.8.0 · Apple Silicon</span>
       </a>
       <a class="btn ghost" href="https://github.com/nicetooo/Znote" target="_blank" rel="noopener">
         View on GitHub
@@ -53,21 +53,21 @@
         <div class="feature-emoji">🌐</div>
         <h3>Translate selection</h3>
         <p>Select any text in any app, tap Right ⌥. A floating overlay shows the translation. One click copies it.</p>
-        <p class="feature-foot">Auto-detect language · Chinese ↔ English</p>
+        <p class="feature-foot">Chinese ↔ English · handles mixed-language text</p>
       </div>
 
       <div class="feature">
         <div class="feature-emoji">📜</div>
         <h3>History</h3>
-        <p>Every transcription and translation is saved locally. Search, filter by date, expand long entries, copy or delete.</p>
+        <p>Every transcription, translation, screenshot and recording is saved locally. Search, filter by type, hover a screenshot to preview it, copy or delete.</p>
         <p class="feature-foot">SQLite · stored in <code>~/Library/Application Support/Znote/</code></p>
       </div>
 
       <div class="feature">
         <div class="feature-emoji">📸</div>
-        <h3>Screenshot</h3>
-        <p>Double-tap Right ⌥ to trigger macOS region screenshot — straight to clipboard, ready to paste.</p>
-        <p class="feature-foot">Uses native screencapture</p>
+        <h3>Capture &amp; annotate</h3>
+        <p>Double-tap Right ⌥ and drag a region. Capture it straight to the clipboard, annotate it first — pen, arrow, shapes, text, mosaic — or record it as video.</p>
+        <p class="feature-foot">↵ capture · E annotate · R record</p>
       </div>
 
     </div>
@@ -83,8 +83,9 @@
       <tbody>
         <tr><td><kbd>Right ⌘</kbd> hold</td><td>Voice → Text (push-to-talk)</td></tr>
         <tr><td><kbd>Right ⌘</kbd> tap</td><td>Toggle History window</td></tr>
+        <tr><td><kbd>Right ⌥</kbd> hold</td><td>Voice → English (speak any language)</td></tr>
         <tr><td><kbd>Right ⌥</kbd> tap</td><td>Translate selected text</td></tr>
-        <tr><td><kbd>Right ⌥</kbd> double-tap</td><td>Screenshot to clipboard</td></tr>
+        <tr><td><kbd>Right ⌥</kbd> double-tap</td><td>Region capture → capture, annotate or record</td></tr>
       </tbody>
     </table>
     <p class="muted">Every hotkey is customizable in Settings — pick any side (Left/Right) + modifier (⌘/⌥/⌃). Tap actions can be swapped to double-tap and vice versa.</p>
@@ -152,7 +153,7 @@
 <script>
   // Replace the hardcoded version on the download button with the real latest
   // release tag from GitHub. If the API is unreachable (rate-limited, offline,
-  // etc.) the static "v0.6.0" fallback is left in place — and the href already
+  // etc.) the static "v0.8.0" fallback is left in place — and the href already
   // points to /releases/latest/download/Znote.dmg, which GitHub redirects to
   // whatever the latest release's DMG actually is, so the download still works.
   fetch('https://api.github.com/repos/nicetooo/Znote/releases/latest')
