@@ -9,6 +9,7 @@ set -uo pipefail
 #   logic     settings, hotkey bindings, silence gate, hallucination filter, i18n
 #   history   SQLite store against a seeded 3000-row old-schema database
 #   hotkeys   tap / hold / double-tap state machine, fed synthetic key events
+#   clipboard ⌘C / ⌘V clipboard borrowing and restoring, on a private pasteboard
 #   editor    screenshot annotation tools + History hover preview, rendered off screen
 #   voice     synthesized speech through the real Whisper pipeline
 #   translate selection translation against Google (needs network; not in the default set)
@@ -45,7 +46,7 @@ export MODEL="${MODEL:-large-v3}"
 export LANGS="${LANGS:-zh-Hans,en}"
 TIMEOUT="${TIMEOUT:-600}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
-if (( $# > 0 )); then SCENARIOS=("$@"); else SCENARIOS=(logic history hotkeys editor voice); fi
+if (( $# > 0 )); then SCENARIOS=("$@"); else SCENARIOS=(logic history hotkeys clipboard editor voice); fi
 
 OUT="$PWD/build/selftest"
 MODEL_DIR="$HOME/Library/Application Support/Znote/Models/models/argmaxinc/whisperkit-coreml/openai_whisper-$MODEL"
@@ -88,6 +89,14 @@ trap '[[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null' EXIT
 
 RESULTS=()
 OVERALL=0
+
+# Every L("key") used in the sources must exist in both string tables.
+if python3 selftest/check_strings.py; then
+    RESULTS+=("strings: PASSED")
+else
+    RESULTS+=("strings: FAILED")
+    OVERALL=1
+fi
 for scenario in "${SCENARIOS[@]}"; do
     dir="$OUT/$scenario"
     mkdir -p "$dir"

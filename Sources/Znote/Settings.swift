@@ -101,10 +101,15 @@ class Settings {
         "zh-Hant": "zh",
     ]
 
+    /// Whisper's code for one of our language options ("zh-Hans" → "zh").
+    static func whisperCode(for language: String) -> String {
+        whisperLangMap[language] ?? language
+    }
+
     /// Single language arg for Whisper, or nil for auto-detect.
     var whisperLanguageArg: String? {
         let langs = selectedLanguages
-        let whisperLangs = Set(langs.map { Settings.whisperLangMap[$0] ?? $0 })
+        let whisperLangs = Set(langs.map(Settings.whisperCode(for:)))
         return whisperLangs.count == 1 ? whisperLangs.first : nil
     }
 

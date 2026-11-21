@@ -70,6 +70,22 @@ extension SelfTest {
                      AudioRecorder.isMeaningful(duration: duration, peak: peak, threshold: 0.05, minDuration: 0.5), want)
         }
 
+        // ── Language check that decides whether to transcribe a second time ──
+        // (text, selected languages, should it count as expected?)
+        for (text, selected, want) in [
+            ("这个 API 的 response 格式不对", ["zh-Hans", "en"], true),     // mixed: used to be read as Indonesian
+            ("merge 一下 PR", ["zh-Hans", "en"], true),
+            ("我们用 React 和 TypeScript 写前端", ["zh-Hans"], true),
+            ("I will send the file to you.", ["zh-Hans", "en"], true),
+            ("I will send the file to you.", ["zh-Hans", "ja"], false),    // English when it isn't selected
+            ("今天下午开会", ["en"], false),
+            ("今日は会議があります", ["zh-Hans", "ja"], true),              // kana → Japanese, selected
+            ("今日は会議があります", ["zh-Hans", "en"], false),             // kanji alone don't make it Chinese
+        ] {
+            r.expect("language check: \"\(text)\" with \(selected.joined(separator: "+"))",
+                     WhisperService.isLanguageExpected(text, selected: selected), want)
+        }
+
         runHotkeySettings(&r)
         runHallucinationFilter(&r)
         runTranslationDirection(&r)

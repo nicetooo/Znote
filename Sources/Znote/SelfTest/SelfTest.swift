@@ -12,6 +12,7 @@ import Foundation
 ///   logic     settings, hotkey bindings, silence gate, hallucination filter, i18n
 ///   history   SQLite store against a seeded old-schema database
 ///   hotkeys   KeyMonitor's gesture state machine, fed synthetic events
+///   clipboard SystemIntegration's ⌘C / ⌘V clipboard borrowing, on a private pasteboard
 ///   editor    screenshot annotation + History hover preview, rendered off screen
 ///   voice     seeded WAVs through the real WhisperService
 ///   translate TranslationService against Google (needs network)
@@ -85,6 +86,7 @@ enum SelfTest {
         case "logic": runLogic(&report)
         case "history": runHistory(request, &report)
         case "hotkeys": await runHotkeys(&report)
+        case "clipboard": await runClipboard(&report)
         case "editor":
             // AppKit views and windows must be made on the main thread.
             let scenario = report.scenario

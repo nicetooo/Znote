@@ -1,4 +1,11 @@
-name: Build & Release
+name: Build
+
+# Verifies that a tag (or main, when run by hand) builds into a working
+# bundle and keeps it as a workflow artifact. It does NOT publish: releases
+# are made by ./release.sh on a machine with the Developer ID certificate,
+# because the published app must be signed and notarized. An earlier version
+# of this workflow uploaded its own ad-hoc-signed Znote.zip to the Release,
+# overwriting the notarized one.
 
 on:
   push:
@@ -6,7 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # required for softprops/action-gh-release to publish
+  contents: read
 
 jobs:
   build:
@@ -93,23 +100,3 @@ jobs:
         with:
           name: Znote.app
           path: Znote.zip
-
-      # Always create the Release page on tag push so it's visible immediately.
-      # When repo signing secrets aren't set, the published Znote.zip will be
-      # ad-hoc signed (Gatekeeper will reject it) — replace it with the local
-      # signed+notarized build from ./package.sh + ./dmg.sh after the workflow.
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: Znote.zip
-          body: |
-            ## Install
-
-            1. Download `Znote.zip` and extract
-            2. Move `Znote.app` to `/Applications/`
-            3. If macOS complains about quarantine: `xattr -cr /Applications/Znote.app`
-            4. Grant permissions (Accessibility + Input Monitoring + Microphone) in System Settings
-            5. Launch from Spotlight or `/Applications/Znote.app`
-
-            **Requires:** Apple Silicon Mac, macOS 14+

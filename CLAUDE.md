@@ -18,7 +18,7 @@ Signing identity: `Developer ID Application: naisierding aihemaiti (ZVZ4AP4H2T)`
 
 ### Self-test (no mic, key presses or user data involved)
 ```bash
-./selftest/run.sh                              # Build build/Znote.app, run logic + history + hotkeys + editor + voice (~1 min)
+./selftest/run.sh                              # Build build/Znote.app, run the string check + logic, history, hotkeys, clipboard, editor, voice (~1.5 min)
 ./selftest/run.sh logic hotkeys                # Only these scenarios
 ./selftest/run.sh translate                    # Selection translation against Google (needs network; not in the default set)
 SKIP_BUILD=1 ./selftest/run.sh                 # Re-run without rebuilding
@@ -31,6 +31,7 @@ Each scenario launches the real binary in self-test mode (`ZNOTE_SELFTEST` + `ZN
 | `logic` | `Settings` (language → Whisper args, model migration, hotkey bindings/conflicts), silence gate, `HallucinationFilter`, i18n tables |
 | `history` | `HistoryStore` against a seeded 3000-row old-schema DB (migration, limit, search, filters, deletes) |
 | `hotkeys` | `KeyMonitor` gesture state machine, fed synthetic `CGEvent`s (no event tap) |
+| `clipboard` | `SystemIntegration`: borrowing the clipboard for ⌘C / ⌘V and restoring every item and type, on a private pasteboard with a fake front app |
 | `editor` | Screenshot annotation (every tool, pixel-checked), undo/redo, export, toolbar + hover-preview placement. Writes `canvas.png` / `toolbar.png` / … to the scenario dir — **look at them** after UI changes |
 | `voice` | `say`-synthesized WAVs through real `WhisperService` (needs the model cached) |
 | `translate` | `TranslationService` end to end |
@@ -59,12 +60,15 @@ codesign --force --deep --options runtime \
 
 ## Release
 ```bash
-./release.sh v0.4.0                    # Create tag → push → GitHub Actions builds & publishes
-./release.sh v0.4.0 -m "First release" # With custom tag message
-./release.sh --list                    # List all tags
-./release.sh --delete v0.4.0           # Delete tag locally + remotely
+./release.sh v0.9.0 --dry-run          # Run every check, change nothing
+./release.sh v0.9.0 --notes notes.md   # The whole release, from this machine
+./release.sh --list                    # List tags
 ```
-Script validates version format (`vX.Y.Z`), checks for uncommitted changes, confirms before pushing. GitHub Actions (`.github/workflows/build.yml`) triggers on tag push, builds release, creates GitHub Release with Znote.zip.
+`release.sh` checks the tree / gh login / notary access, runs the self-test, stamps the version into `Info.plist` and the site (committing if it changed), runs `package.sh` + `dmg.sh`, pushes main and the tag, creates the GitHub Release with `Znote.dmg` + `Znote.zip`, then downloads the published DMG and compares it with the local one. It asks once before pushing (`-y` to skip).
+
+- Releases are published **only** from here — the app must be signed and notarized with the local Developer ID. CI (`.github/workflows/build.yml`) just verifies the tag builds; it publishes nothing.
+- The site's download button points at the latest release's `Znote.dmg`, so a release without the DMG breaks the site. `release.sh` always uploads it.
+- Notarization needs the Mac unlocked (the keychain profile is unreadable while the screen is locked) and Apple's developer agreements current — the scripts print Apple's actual error.
 
 ## Distribution (local signed + notarized)
 ```bash
@@ -82,7 +86,7 @@ xcrun notarytool store-credentials "Znote-notary" \
 
 - **Fully native Swift** — WhisperKit (CoreML) replaces previous Python mlx_whisper dependency
 - **No extra apps** — one self-contained .app bundle
-- **Logging**: Use `log()` function (writes to `/tmp/znote.log`), NOT `print()`
+- **Logging**: Use `log()` function (writes to `/tmp/znote.log`, mode 0600, rotated to `.1` past 2 MB), NOT `print()`. It records dictated and selected text — keep it private
 - **App name**: "Znote" everywhere — bundle name, menu, window titles
 - **Bundle identifier**: `com.znote.app`
 
@@ -131,8 +135,7 @@ Key codes: Right ⌘ = keyCode 54, Right ⌥ = keyCode 61. Device flags: NX_DEVI
 
 ## GitHub
 - **Repo**: `nicetooo/Znote` (SSH: `git@github.com:nicetooo/Znote.git`)
-- **Actions**: `.github/workflows/build.yml` — triggers on `v*` tag push + manual dispatch
-- **Permissions**: `contents: write` set on workflow so `softprops/action-gh-release` can publish
+- **Actions**: `.github/workflows/build.yml` — build check on `v*` tag push + manual dispatch; publishes nothing (`contents: read`)
 
 ## Project Structure
 ```
@@ -165,5 +168,5 @@ Root-level scripts:
 - `sign.sh` — build + refresh bundle + sign with stable Developer ID
 - `package.sh` — produces signed + notarized + stapled `dist/Znote.zip`
 - `dmg.sh` — produces signed + notarized + stapled `dist/Znote.dmg`
-- `release.sh` — tag + push to trigger GitHub Actions release
+- `release.sh` — the whole release: checks, self-test, version stamp, package, tag, GitHub Release, verification
 - `install.sh` — legacy build-from-source installer (predates DMG distribution)

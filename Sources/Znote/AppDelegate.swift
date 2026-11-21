@@ -341,6 +341,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log("\(mode == .translate ? "Translating" : "Transcribing")...")
 
             let audioPath = self.audioRecorder.outputPath
+            let duration = self.audioRecorder.recordingDuration
             let whisper = self.whisperService!
             let integration = self.systemIntegration!
 
@@ -371,7 +372,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         // Both modes write to the voice history. The translated
                         // English text is just another voice transcript from
                         // the user's perspective.
-                        HistoryStore.shared.addVoice(text: text)
+                        HistoryStore.shared.addVoice(text: text, duration: duration)
                     } else {
                         log("No speech detected.")
                     }
@@ -633,34 +634,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             log("Translating selection...")
 
-            // Copy selected text
-            guard let selectedText = self.systemIntegration.getSelectedText() else {
-                log("No text selected.")
-                return
+            // Copy the selection (asynchronous: it waits on the front app).
+            self.systemIntegration.getSelectedText { [weak self] selectedText in
+                self?.translate(selection: selectedText)
             }
+        }
+    }
 
-            log("Selected: \(selectedText)")
+    private func translate(selection selectedText: String?) {
+        guard let selectedText else {
+            log("No text selected.")
+            return
+        }
+        log("Selected: \(selectedText)")
 
-            // Show loading overlay immediately for instant feedback
-            self.translationOverlay.showLoading()
-            self.updateState(.processing)
+        // Show loading overlay immediately for instant feedback
+        translationOverlay.showLoading()
+        updateState(.processing)
 
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result = self.translationService.translateWithInfo(selectedText)
-                DispatchQueue.main.async {
-                    if let result = result {
-                        log("Translation: \(result.text)")
-                        self.translationOverlay.showResult(result.text)
-                        HistoryStore.shared.addTranslation(
-                            input: selectedText, output: result.text,
-                            sourceLang: result.sourceLang, targetLang: result.targetLang
-                        )
-                    } else {
-                        log("Translation failed.")
-                        self.translationOverlay.hide()
-                    }
-                    self.updateState(.ready)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = self.translationService.translateWithInfo(selectedText)
+            DispatchQueue.main.async {
+                if let result = result {
+                    log("Translation: \(result.text)")
+                    self.translationOverlay.showResult(result.text)
+                    HistoryStore.shared.addTranslation(
+                        input: selectedText, output: result.text,
+                        sourceLang: result.sourceLang, targetLang: result.targetLang
+                    )
+                } else {
+                    log("Translation failed.")
+                    self.translationOverlay.hide()
                 }
+                self.updateState(.ready)
             }
         }
     }

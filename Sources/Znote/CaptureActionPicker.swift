@@ -7,6 +7,17 @@ final class CaptureActionPicker {
     /// 8 + 92 (capture) + 4 + 96 (annotate) + 4 + 78 (record) + 4 + 28 (cancel) + 8
     static let width: CGFloat = 322
 
+    /// Below the selection and centred on it; above if there's no room below;
+    /// always fully on `screen`.
+    static func origin(near selection: NSRect, size: NSSize, screen: NSRect) -> NSPoint {
+        let gap: CGFloat = 12, margin: CGFloat = 8
+        var y = selection.minY - size.height - gap
+        if y < screen.minY + margin { y = selection.maxY + gap }
+        y = min(max(y, screen.minY + margin), screen.maxY - margin - size.height)
+        let x = max(screen.minX + margin, min(selection.midX - size.width / 2, screen.maxX - size.width - margin))
+        return NSPoint(x: x, y: y)
+    }
+
     private var panel: NSPanel?
     private var localKeyMonitor: Any?
 
@@ -34,18 +45,12 @@ final class CaptureActionPicker {
         let h: CGFloat = 66       // 52 for buttons + 14 for keyboard hint row
         let gap: CGFloat = 12
 
-        // Prefer below the selection; flip above if no room.
-        var origin = NSPoint(
-            x: selectionRect.midX - w / 2,
-            y: selectionRect.minY - h - gap
-        )
-        if let screen = NSScreen.main {
-            if origin.y < screen.frame.minY + 8 {
-                origin.y = selectionRect.maxY + gap
-            }
-            // Keep horizontally on-screen
-            origin.x = max(screen.frame.minX + 8, min(origin.x, screen.frame.maxX - w - 8))
-        }
+        // Place it relative to the screen the selection is on — not the
+        // "main" screen, which is wherever keyboard focus happens to be.
+        let center = NSPoint(x: selectionRect.midX, y: selectionRect.midY)
+        let screen = NSScreen.screens.first { $0.frame.contains(center) } ?? NSScreen.main
+        let origin = CaptureActionPicker.origin(near: selectionRect, size: NSSize(width: w, height: h),
+                                                screen: screen?.frame ?? selectionRect)
 
         let p = PickerPanel(
             contentRect: NSRect(origin: origin, size: NSSize(width: w, height: h)),

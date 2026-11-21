@@ -5,8 +5,7 @@ import AppKit
 /// origin) via `onSelected`, or fires `onCancel` if dismissed with ESC or
 /// when the dragged area is too tiny to be a real selection.
 ///
-/// Single-display only for the first iteration; multi-display support would
-/// open one window per screen and union them.
+/// One overlay window per screen, so the drag can start on any display.
 final class RegionSelector {
     private var windows: [NSWindow] = []
     private var onSelected: ((NSRect) -> Void)?

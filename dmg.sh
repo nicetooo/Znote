@@ -37,8 +37,10 @@ if ! command -v create-dmg &>/dev/null; then
     exit 1
 fi
 
-if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" &>/dev/null; then
-    err "Notary profile '$NOTARY_PROFILE' missing — see package.sh header for setup"
+if ! notary_out=$(xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" 2>&1); then
+    err "Apple's notary service refused the request:"
+    echo "$notary_out" | head -5 | sed 's/^/    /' >&2
+    echo "    (profile setup: see the package.sh header; agreements: https://developer.apple.com/account)" >&2
     exit 1
 fi
 
@@ -74,11 +76,22 @@ codesign --force --sign "$IDENTITY" "$OUT_DMG"
 ok "Signed"
 
 # ── 3. Submit DMG for notarization ────────────────────────
+# Submissions occasionally bounce with a transient error (seen: a 403 about
+# agreements one minute after another submission was accepted), so retry.
 info "Submitting DMG for notarization..."
-if ! xcrun notarytool submit "$OUT_DMG" \
-    --keychain-profile "$NOTARY_PROFILE" \
-    --wait; then
-    err "Notarization failed."
+accepted=false
+for attempt in 1 2 3; do
+    if submit_out=$(xcrun notarytool submit "$OUT_DMG" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) \
+       && echo "$submit_out" | grep -q "status: Accepted"; then
+        accepted=true
+        break
+    fi
+    warn "Attempt $attempt failed:"
+    echo "$submit_out" | tail -4 | sed 's/^/    /' >&2
+    [[ $attempt -lt 3 ]] && sleep 20
+done
+if ! $accepted; then
+    err "Notarization failed after 3 attempts."
     exit 1
 fi
 ok "Notarization accepted"

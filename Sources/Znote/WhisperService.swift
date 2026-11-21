@@ -5,9 +5,27 @@ import WhisperKit
 
 /// Transcribes audio using WhisperKit (CoreML-native, no Python/ffmpeg needed).
 class WhisperService {
-    private var whisperKit: WhisperKit?
-    private var loadedModel: String = ""
-    private(set) var isLoading = false
+    // Model state is touched from the main thread (overlay decisions) and
+    // from background tasks (loading, transcribing), so it sits behind a lock.
+    private let stateLock = NSLock()
+    private var _whisperKit: WhisperKit?
+    private var _loadedModel = ""
+    private var _isLoading = false
+
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+    private var whisperKit: WhisperKit? {
+        get { locked { _whisperKit } }
+        set { locked { _whisperKit = newValue } }
+    }
+    private var loadedModel: String {
+        get { locked { _loadedModel } }
+        set { locked { _loadedModel = newValue } }
+    }
+    var isLoading: Bool { locked { _isLoading } }
 
     /// How many times a transcription was re-run with a forced language
     /// because the auto-detected one wasn't among the user's languages.
@@ -116,7 +134,7 @@ class WhisperService {
             // input languages) would always fail and trigger pointless retries.
             if !translate, forcedLang == nil, !Settings.shared.selectedLanguages.isEmpty {
                 let cleaned = cleanupTranscription(rawText)
-                if !isLanguageExpected(cleaned) {
+                if !WhisperService.isLanguageExpected(cleaned, selected: Settings.shared.selectedLanguages) {
                     if let retryLang = bestRetryLanguage() {
                         log("Whisper: language mismatch, retrying with forced '\(retryLang)'")
                         languageRetryCount += 1
@@ -154,12 +172,17 @@ class WhisperService {
 
     /// Load a WhisperKit model. Returns true on success.
     func loadModel(_ variant: String) async -> Bool {
-        guard !isLoading else {
+        // Check and claim in one step, so two callers can't both start a load.
+        let alreadyLoading: Bool = locked {
+            if _isLoading { return true }
+            _isLoading = true
+            return false
+        }
+        guard !alreadyLoading else {
             log("Whisper: already loading a model, please wait")
             return false
         }
-        isLoading = true
-        defer { isLoading = false }
+        defer { locked { _isLoading = false } }
 
         log("Whisper: loading model '\(variant)'...")
         let startTime = Date()
@@ -174,8 +197,8 @@ class WhisperService {
                 model: variant,
                 downloadBase: Settings.modelStorageDir,
                 computeOptions: compute,
-                verbose: true,
-                logLevel: .debug,
+                verbose: false,
+                logLevel: .error,
                 prewarm: true,   // warm CoreML compute pipelines at load time
                 load: true,
                 download: true
@@ -236,33 +259,38 @@ class WhisperService {
 
     // MARK: - Language Verification
 
-    /// Map internal language codes to Whisper language codes
-    private static let whisperLangMap: [String: String] = [
-        "zh-Hans": "zh",
-        "zh-Hant": "zh",
-    ]
+    /// Whether `text` is in one of the languages the user said they speak.
+    /// A "no" makes the caller transcribe again with the language forced.
+    static func isLanguageExpected(_ text: String, selected: [String]) -> Bool {
+        let selectedBases = Set(selected.map { $0.components(separatedBy: "-").first ?? $0 })
 
-    private func isLanguageExpected(_ text: String) -> Bool {
+        // Chinese characters, and Chinese is one of the user's languages:
+        // expected, whatever English is mixed in. NLLanguageRecognizer reads
+        // "这个 API 的 response 格式不对" as Indonesian, which used to trigger a
+        // pointless second pass on every mixed sentence. (Kana means Japanese,
+        // which the recognizer handles.)
+        if selectedBases.contains("zh") {
+            let scalars = text.unicodeScalars
+            let hasHan = scalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
+            let hasKana = scalars.contains { (0x3040...0x30FF).contains($0.value) }
+            if hasHan && !hasKana { return true }
+        }
+
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(text)
         guard let detected = recognizer.dominantLanguage else { return true }
 
         let detectedBase = detected.rawValue.components(separatedBy: "-").first ?? detected.rawValue
-        let selectedBases = Set(Settings.shared.selectedLanguages.map {
-            $0.components(separatedBy: "-").first ?? $0
-        })
-
         let expected = selectedBases.contains(detectedBase)
         if !expected {
-            log("Whisper: NLLanguageRecognizer detected '\(detected.rawValue)' — not in selected \(Settings.shared.selectedLanguages)")
+            log("Whisper: NLLanguageRecognizer detected '\(detected.rawValue)' — not in selected \(selected)")
         }
         return expected
     }
 
     private func bestRetryLanguage() -> String? {
-        let langs = Settings.shared.selectedLanguages
-        guard let first = langs.first else { return nil }
-        return WhisperService.whisperLangMap[first] ?? first
+        guard let first = Settings.shared.selectedLanguages.first else { return nil }
+        return Settings.whisperCode(for: first)
     }
 
     // MARK: - Line Cleanup

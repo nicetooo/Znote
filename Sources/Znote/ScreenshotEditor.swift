@@ -448,6 +448,9 @@ final class AnnotationToolbar: NSView, NSViewToolTipOwner {
         select(items[i].item)
     }
 
+    /// Where an item sits in the toolbar's own coordinates.
+    func rect(of item: Item) -> NSRect? { items.first { $0.item == item }?.rect }
+
     /// Act on an item as if it were clicked.
     func select(_ item: Item) {
         guard isEnabled(item) else { return }

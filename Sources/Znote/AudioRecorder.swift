@@ -4,16 +4,26 @@ import Foundation
 /// Records audio from the microphone using AVAudioEngine.
 /// Saves as WAV file suitable for Whisper.
 class AudioRecorder {
-    let outputPath = "/tmp/znote_recording.wav"
+    /// In the per-user temporary directory (not /tmp): the recording is the
+    /// user's voice and shouldn't be readable by other accounts on the Mac.
+    let outputPath = FileManager.default.temporaryDirectory.appendingPathComponent("znote_recording.wav").path
 
     /// Callback reporting current audio level (0.0 - 1.0), called on audio thread
     var onAudioLevel: ((Float) -> Void)?
 
-    /// Peak audio level observed during current recording (0.0 - 1.0, normalized)
-    private(set) var peakLevel: Float = 0.0
+    /// Peak audio level observed during current recording (0.0 - 1.0, normalized).
+    /// Written on the audio thread, read on the main thread.
+    private(set) var peakLevel: Float {
+        get { levelLock.lock(); defer { levelLock.unlock() }; return _peakLevel }
+        set { levelLock.lock(); _peakLevel = newValue; levelLock.unlock() }
+    }
+    private var _peakLevel: Float = 0.0
+    private let levelLock = NSLock()
 
     /// Recording start time
     private(set) var recordingStartTime: Date?
+    /// Set when the recording stops, so its length doesn't keep growing afterwards.
+    private var recordingEndTime: Date?
 
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
@@ -33,16 +43,17 @@ class AudioRecorder {
         duration >= minDuration && peak >= threshold
     }
 
-    /// Duration of the last recording in seconds
+    /// Duration of the last recording in seconds (so far, if still recording)
     var recordingDuration: TimeInterval {
         guard let start = recordingStartTime else { return 0 }
-        return Date().timeIntervalSince(start)
+        return (recordingEndTime ?? Date()).timeIntervalSince(start)
     }
 
     func startRecording() {
         // Reset tracking
         peakLevel = 0.0
         recordingStartTime = Date()
+        recordingEndTime = nil
 
         // Clean up previous recording
         try? FileManager.default.removeItem(atPath: outputPath)
@@ -52,7 +63,7 @@ class AudioRecorder {
         let hardwareFormat = inputNode.outputFormat(forBus: 0)
 
         // Create output file — write as 16-bit PCM WAV at hardware sample rate.
-        // mlx_whisper handles resampling internally.
+        // WhisperKit resamples to 16 kHz itself.
         let url = URL(fileURLWithPath: outputPath)
         let writeSettings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatLinearPCM),
@@ -103,6 +114,7 @@ class AudioRecorder {
     }
 
     func stopRecording() {
+        if recordingEndTime == nil { recordingEndTime = Date() }
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil

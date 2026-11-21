@@ -30,18 +30,24 @@ ok()   { echo -e "${GREEN}✔${NC} $*"; }
 warn() { echo -e "${YELLOW}⚠${NC} $*"; }
 err()  { echo -e "${RED}✖${NC} $*" >&2; }
 
-# ── 0. Check notary profile exists ──────────────────────────
-if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" &>/dev/null; then
-    err "Notary keychain profile '$NOTARY_PROFILE' not found."
-    echo ""
-    echo "One-time setup — run this first:"
-    echo ""
-    echo "  xcrun notarytool store-credentials \"$NOTARY_PROFILE\" \\"
-    echo "      --apple-id \"nicetooo.a@gmail.com\" \\"
-    echo "      --team-id \"ZVZ4AP4H2T\""
-    echo ""
-    echo "When prompted, enter your App-Specific Password."
-    echo "Generate one at: https://appleid.apple.com → Sign-In and Security → App-Specific Passwords"
+# ── 0. Check the notary service will take a submission ──────
+# Print what Apple actually said: a missing keychain profile and an expired
+# developer agreement both fail here, and need different fixes.
+if ! notary_out=$(xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" 2>&1); then
+    err "Apple's notary service refused the request:"
+    echo "$notary_out" | head -5 | sed 's/^/    /' >&2
+    echo "" >&2
+    if echo "$notary_out" | grep -qi "agreement"; then
+        echo "Sign the pending agreement at https://developer.apple.com/account and try again." >&2
+    else
+        echo "If the keychain profile is missing, create it once with:" >&2
+        echo "" >&2
+        echo "  xcrun notarytool store-credentials \"$NOTARY_PROFILE\" \\" >&2
+        echo "      --apple-id \"nicetooo.a@gmail.com\" \\" >&2
+        echo "      --team-id \"ZVZ4AP4H2T\"" >&2
+        echo "" >&2
+        echo "(App-Specific Password: https://appleid.apple.com → Sign-In and Security)" >&2
+    fi
     exit 1
 fi
 

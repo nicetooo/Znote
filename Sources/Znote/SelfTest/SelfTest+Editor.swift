@@ -123,6 +123,8 @@ extension SelfTest {
         small.undo()
 
         runEditorWiring(request, document, &r)
+        runEditorEvents(document, &r)
+        runHoverTable(&r)
         runEditorLayout(&r)
 
         // ── Pictures for a human to look at ──
@@ -195,6 +197,144 @@ extension SelfTest {
         r.step("editor cancel: reports cancel, not done", ok: cancelled && doneData != nil && !editor.isOpen)
     }
 
+    // MARK: - Through the window's own event dispatch
+
+    /// Send a mouse event to whatever view is under `point` (given in `view`'s
+    /// coordinates), the way AppKit would deliver a real one.
+    private static func mouse(_ type: NSEvent.EventType, in view: NSView, at point: NSPoint) {
+        guard let window = view.window, let event = NSEvent.mouseEvent(
+            with: type, location: view.convert(point, to: nil), modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return }
+        window.sendEvent(event)
+    }
+
+    /// The same marks as before, but arriving as NSEvents through
+    /// NSWindow.sendEvent — hit-testing, first-responder changes and the
+    /// inline text field's editor are all real here. Still never on screen.
+    private static func runEditorEvents(_ document: AnnotationDocument, _ r: inout Report) {
+        let editor = ScreenshotEditor()
+        // AppKit only dispatches events to windows that are ordered in, so
+        // these are — far outside any display, where nobody sees them.
+        let offscreen = NSRect(x: -30000, y: -30000, width: 400, height: 300)
+        editor.open(document: document, over: offscreen, show: false, onDone: { _ in }, onCancel: {})
+        defer { editor.cancel() }
+        guard let canvas = editor.canvas, let toolbar = editor.toolbar,
+              let canvasWindow = canvas.window, let toolbarWindow = toolbar.window else {
+            r.step("events: editor has windows", ok: false)
+            return
+        }
+        toolbarWindow.setFrameOrigin(NSPoint(x: offscreen.minX, y: offscreen.minY - 60))
+        canvasWindow.orderFront(nil)
+        toolbarWindow.orderFront(nil)
+        let onAnyScreen = NSScreen.screens.contains { $0.frame.intersects(canvasWindow.frame) || $0.frame.intersects(toolbarWindow.frame) }
+        r.step("events: test windows are ordered in but off every display",
+               ok: canvasWindow.isVisible && toolbarWindow.isVisible && !onAnyScreen,
+               ["canvas": "\(canvasWindow.frame.origin)", "toolbar": "\(toolbarWindow.frame.origin)"])
+        let before = document.annotations.count
+        func click(_ item: AnnotationToolbar.Item) {
+            guard let rect = toolbar.rect(of: item) else { return }
+            mouse(.leftMouseDown, in: toolbar, at: NSPoint(x: rect.midX, y: rect.midY))
+            mouse(.leftMouseUp, in: toolbar, at: NSPoint(x: rect.midX, y: rect.midY))
+        }
+
+        click(.tool(.rectangle))
+        r.expect("events: clicking a toolbar button selects the tool", canvas.tool, .rectangle)
+
+        mouse(.leftMouseDown, in: canvas, at: NSPoint(x: 50, y: 50))
+        mouse(.leftMouseDragged, in: canvas, at: NSPoint(x: 120, y: 100))
+        mouse(.leftMouseUp, in: canvas, at: NSPoint(x: 150, y: 120))
+        if case .rectangle(let rect, _)? = document.annotations.last, document.annotations.count == before + 1 {
+            r.expect("events: dragging on the canvas draws", "\(rect)", "\(NSRect(x: 50, y: 50, width: 100, height: 70))")
+        } else {
+            r.step("events: dragging on the canvas draws", ok: false, ["marks": "\(document.annotations.count - before)"])
+        }
+
+        // Text: click to place the field, type into its editor, Return commits.
+        click(.tool(.text))
+        mouse(.leftMouseDown, in: canvas, at: NSPoint(x: 60, y: 200))
+        mouse(.leftMouseUp, in: canvas, at: NSPoint(x: 60, y: 200))
+        let fieldEditor = canvas.window?.firstResponder as? NSTextView
+        r.step("events: clicking with the text tool focuses a text field", ok: canvas.isEditingText && fieldEditor != nil)
+        fieldEditor?.insertText("Hi there", replacementRange: NSRange(location: NSNotFound, length: 0))
+        fieldEditor?.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        if case .text(let string, let topLeft, _)? = document.annotations.last {
+            r.expect("events: typed text is committed by Return", string, "Hi there")
+            r.expect("events: the label sits where the click was", "\(topLeft)", "\(NSPoint(x: 60, y: 200))")
+        } else {
+            r.step("events: typed text is committed by Return", ok: false)
+        }
+        r.expect("events: the field is gone after committing", canvas.isEditingText, false)
+
+        // Esc while typing discards that label only.
+        let afterText = document.annotations.count
+        mouse(.leftMouseDown, in: canvas, at: NSPoint(x: 60, y: 120))
+        mouse(.leftMouseUp, in: canvas, at: NSPoint(x: 60, y: 120))
+        let secondEditor = canvas.window?.firstResponder as? NSTextView
+        secondEditor?.insertText("discard me", replacementRange: NSRange(location: NSNotFound, length: 0))
+        secondEditor?.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        r.step("events: Esc while typing discards the label", ok: document.annotations.count == afterText && !canvas.isEditingText)
+
+        // Switching tool mid-typing keeps what was typed.
+        mouse(.leftMouseDown, in: canvas, at: NSPoint(x: 200, y: 120))
+        mouse(.leftMouseUp, in: canvas, at: NSPoint(x: 200, y: 120))
+        (canvas.window?.firstResponder as? NSTextView)?.insertText("kept", replacementRange: NSRange(location: NSNotFound, length: 0))
+        click(.tool(.arrow))
+        if case .text(let string, _, _)? = document.annotations.last {
+            r.expect("events: switching tools commits the label being typed", string, "kept")
+        } else {
+            r.step("events: switching tools commits the label being typed", ok: false)
+        }
+
+        click(.undo); click(.undo); click(.undo)
+        r.expect("events: toolbar undo button", document.annotations.count, before)
+    }
+
+    // MARK: - Hover-aware table
+
+    private final class EightRows: NSObject, NSTableViewDataSource {
+        func numberOfRows(in tableView: NSTableView) -> Int { 8 }
+    }
+
+    private static func runHoverTable(_ r: inout Report) {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 220), styleMask: .borderless,
+                              backing: .buffered, defer: true)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
+        let table = HoverTableView(frame: scroll.bounds)
+        let rows = EightRows()
+        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c")))
+        table.headerView = nil
+        table.rowHeight = 50
+        table.intercellSpacing = .zero
+        table.dataSource = rows
+        scroll.documentView = table
+        window.contentView = scroll
+        table.reloadData()
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        var reported: [String] = []
+        table.onHoverRow = { reported.append($0.map(String.init) ?? "none") }
+        func move(toRow row: Int, offset: CGFloat = 25) {
+            let point = NSPoint(x: 20, y: CGFloat(row) * 50 + offset)   // the table is flipped: y grows downward
+            guard let event = NSEvent.mouseEvent(
+                with: .mouseMoved, location: table.convert(point, to: nil), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return }
+            table.mouseMoved(with: event)
+        }
+        move(toRow: 1)
+        move(toRow: 1, offset: 40)     // still row 1: no second report
+        move(toRow: 2)
+        r.expect("hover table: reports each row once as the pointer crosses it", reported, ["1", "2"])
+        if let exit = NSEvent.enterExitEvent(with: .mouseExited, location: .zero, modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                             context: nil, eventNumber: 0, trackingNumber: 0, userData: nil) {
+            table.mouseExited(with: exit)
+        }
+        r.expect("hover table: reports leaving", reported.last, "none")
+        withExtendedLifetime(rows) {}
+    }
+
     // MARK: - Layout rules
 
     private static func runEditorLayout(_ r: inout Report) {
@@ -211,6 +351,21 @@ extension SelfTest {
                  origin(NSRect(x: 0, y: 0, width: 1600, height: 1000)), "\(NSPoint(x: 1112, y: 8))")
         r.expect("toolbar: kept on screen for a narrow selection at the left edge",
                  origin(NSRect(x: 0, y: 400, width: 100, height: 300)), "\(NSPoint(x: 8, y: 352))")
+
+        // The region picker (Capture / Annotate / Record).
+        let picker = NSSize(width: CaptureActionPicker.width, height: 66)
+        func pickerOrigin(_ selection: NSRect, on screen: NSRect = screen) -> String {
+            "\(CaptureActionPicker.origin(near: selection, size: picker, screen: screen))"
+        }
+        r.expect("picker: below the selection, centred",
+                 pickerOrigin(NSRect(x: 400, y: 400, width: 600, height: 300)), "\(NSPoint(x: 539, y: 322))")
+        r.expect("picker: above when there's no room below",
+                 pickerOrigin(NSRect(x: 400, y: 20, width: 600, height: 300)), "\(NSPoint(x: 539, y: 332))")
+        r.expect("picker: on screen when the selection fills it",
+                 pickerOrigin(NSRect(x: 0, y: 0, width: 1600, height: 1000)), "\(NSPoint(x: 639, y: 926))")
+        r.expect("picker: stays on the second display the selection is on",
+                 pickerOrigin(NSRect(x: 2000, y: 400, width: 400, height: 300),
+                              on: NSRect(x: 1600, y: 0, width: 1600, height: 1000)), "\(NSPoint(x: 2039, y: 322))")
 
         let anchor = NSRect(x: 300, y: 260, width: 520, height: 480)
         func preview(_ image: NSSize, anchor: NSRect = anchor, rowMidY: CGFloat = 500) -> NSRect {
