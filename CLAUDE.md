@@ -110,6 +110,7 @@ Key codes: Right ⌘ = keyCode 54, Right ⌥ = keyCode 61. Device flags: NX_DEVI
 - **Compute units**: large models → `cpuAndGPU`; smaller models → `cpuAndNeuralEngine` (ANE)
 - **Speed flags**: `withoutTimestamps=true`, `wordTimestamps=false`, `temperatureFallbackCount=0`, `prewarm=true`
 - **Language detection**: Do NOT force language unless exactly 1 language selected in Settings (after deduplication — zh-Hans and zh-Hant both map to "zh"). Multiple selected → auto-detect → verify with NLLanguageRecognizer → retry with forced language if mismatch.
+- **Chinese punctuation**: left alone, Large V3 writes a recording either Simplified-with-punctuation or Traditional-with-none, at random. The final pass therefore gets a short prompt (`WhisperService.stylePrompt`, "嗯，好的。") whenever Chinese may be spoken and the task isn't translate. With a prompt `firstTokenLogProbThreshold` must be nil, or most prompts come back as an empty transcription. Previews get no prompt (each prompt token costs a decoder step on every pass). Needs WhisperKit ≥ 1.1.0.
 - **Token cleanup**: Strip `<\|...\|>` tokens via regex; merge multi-line output into single line
 - **Chinese simplified/traditional**: Separate options in Settings. Only simplified → `CFStringTransform("Hant-Hans")`. Only traditional → `CFStringTransform("Hans-Hant")`. Both → no conversion.
 - **Silence/hallucination**: Audio level threshold (peak RMS) + minimum duration check + expanded hallucination phrase blacklist (incl. "thank"/"thanks" variants)

@@ -70,7 +70,8 @@ class WhisperService {
         }
 
         let forcedLang = Settings.shared.whisperLanguageArg
-        let options = WhisperService.decodingOptions(translate: translate, forcedLanguage: forcedLang)
+        var options = WhisperService.decodingOptions(translate: translate, forcedLanguage: forcedLang)
+        applyStylePrompt(&options, kit, translate: translate)
 
         let modeLabel = translate ? "translate→en" : "transcribe"
         log("Whisper: \(modeLabel) (model: \(model), lang: \(forcedLang ?? "auto"))...")
@@ -164,6 +165,33 @@ class WhisperService {
         return options
     }
 
+    /// A few words handed to the decoder as "what was said just before", to
+    /// settle how it writes Chinese. Left to itself Large V3 writes any
+    /// given recording in one of two styles, seemingly at random:
+    /// Simplified with punctuation, or Traditional with none at all — a
+    /// whole paragraph without a comma. A short punctuated phrase in front
+    /// pins the first style. Short on purpose: the decoder reads it one
+    /// token at a time, on every pass, at the same cost as writing one.
+    /// nil when Chinese isn't among the languages being spoken, and when
+    /// translating (the output is English).
+    static func stylePrompt(selected: [String], translate: Bool) -> String? {
+        guard !translate else { return nil }
+        guard selected.isEmpty || selected.contains(where: { $0.hasPrefix("zh") }) else { return nil }
+        return "嗯，好的。"
+    }
+
+    private func applyStylePrompt(_ options: inout DecodingOptions, _ kit: WhisperKit, translate: Bool) {
+        guard let prompt = WhisperService.stylePrompt(selected: Settings.shared.selectedLanguages, translate: translate),
+              let tokenizer = kit.tokenizer else { return }
+        options.promptTokens = tokenizer.encode(text: " " + prompt).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+        // WhisperKit gives up on a segment whose first word it is less than
+        // sure of — and after a prompt it often is, having just been told
+        // something unrelated. Left on, most prompts came back as an empty
+        // transcription. Silence is still caught by the other thresholds,
+        // the segment filter and the audio-level gate.
+        options.firstTokenLogProbThreshold = nil
+    }
+
     /// A result's text without the segments Whisper itself thinks are
     /// silence (hallucinated on it), and how many segments were kept.
     static func spokenText(of result: TranscriptionResult, quiet: Bool = false) -> (text: String, kept: Int) {
@@ -195,6 +223,8 @@ class WhisperService {
     func transcribePreview(samples: [Float], translate: Bool = false) async -> String? {
         guard let kit = whisperKit, loadedModel == Settings.shared.whisperModel, !samples.isEmpty else { return nil }
         let forcedLang = Settings.shared.whisperLanguageArg
+        // No style prompt here: it costs every pass the better part of a
+        // second, and a preview is about to be replaced anyway.
         let options = WhisperService.decodingOptions(translate: translate, forcedLanguage: forcedLang)
         do {
             let results: [TranscriptionResult] = try await kit.transcribe(audioArray: samples, decodeOptions: options)

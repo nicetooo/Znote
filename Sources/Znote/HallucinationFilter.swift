@@ -50,6 +50,7 @@ enum HallucinationFilter {
         $0.count != $1.count ? $0.count > $1.count : $0 < $1
     }
 
+    private static let asciiTerminator: [Character: Character] = ["。": ".", "！": "!", "？": "?"]
     private static let sentenceTerminators: Set<Character> = [".", "!", "?", "。", "！", "？", "…"]
     private static let clauseSeparators: Set<Character> = [",", "，", "、", ";", "；", ":", "："]
     private static let danglingSeparators = CharacterSet.whitespacesAndNewlines
@@ -65,7 +66,17 @@ enum HallucinationFilter {
                 log("Whisper: filtered pure hallucination: \"\(result)\"")
                 return ""
             }
-            guard let cut = trailingHallucinationStart(in: result) else { break }
+            // The phrases are listed with ASCII endings; Whisper writing in
+            // a Chinese style ends them "Thank you。". Look for the phrase in
+            // a copy with that one character swapped (same length, so the
+            // position carries over), and cut the original.
+            var probe = result
+            if let last = probe.last, let ascii = HallucinationFilter.asciiTerminator[last] {
+                probe.removeLast()
+                probe.append(ascii)
+            }
+            guard let found = trailingHallucinationStart(in: probe) else { break }
+            let cut = result.index(result.startIndex, offsetBy: probe.distance(from: probe.startIndex, to: found))
 
             let removed = result[cut...]
             // Drop the separator left dangling before the phrase, but keep the

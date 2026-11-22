@@ -86,6 +86,20 @@ extension SelfTest {
                      WhisperService.isLanguageExpected(text, selected: selected), want)
         }
 
+        // The phrase put in front of the decoder to settle Chinese punctuation.
+        for (selected, translate, want): ([String], Bool, String?) in [
+            (["zh-Hans"], false, "嗯，好的。"),
+            (["zh-Hant"], false, "嗯，好的。"),
+            (["zh-Hans", "en"], false, "嗯，好的。"),
+            ([], false, "嗯，好的。"),
+            (["en"], false, nil),
+            (["en", "ja"], false, nil),
+            (["zh-Hans"], true, nil),
+        ] {
+            r.expect("style prompt: \(selected.isEmpty ? "auto" : selected.joined(separator: "+"))\(translate ? ", translating" : "")",
+                     WhisperService.stylePrompt(selected: selected, translate: translate), want)
+        }
+
         runHotkeySettings(&r)
         runLiveText(&r)
         runHallucinationFilter(&r)
@@ -331,6 +345,10 @@ extension SelfTest {
         let cases: [(String, String)] = [
             // Kept: the phrase is part of the sentence.
             ("I will send the file to you.", "I will send the file to you."),
+            // Whisper writing in a Chinese style: comma before, Chinese full stop after.
+            ("我们今天就先讨论到这里,Thank you。", "我们今天就先讨论到这里"),
+            ("我们今天就先讨论到这里。Thank you！", "我们今天就先讨论到这里。"),
+            ("我们今天就先讨论到这里。", "我们今天就先讨论到这里。"),
             ("Let me play some music", "Let me play some music"),
             ("I just wanted to say thank you.", "I just wanted to say thank you."),
             ("Please read it to the end.", "Please read it to the end."),
