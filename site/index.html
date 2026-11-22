@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Znote — Voice-to-text + Translate, native on macOS</title>
-<meta name="description" content="A native Swift macOS menu bar app for push-to-talk voice-to-text, instant translation, screenshot, and history. Powered by WhisperKit, runs entirely on-device on Apple Silicon." />
+<title>Znote — Voice-to-text, Translate + Notes, native on macOS</title>
+<meta name="description" content="A native Swift macOS menu bar app for push-to-talk voice-to-text, instant translation, notes on anything you select, screenshot, and history. Powered by WhisperKit, runs entirely on-device on Apple Silicon." />
 <meta name="theme-color" content="#0a0a0a" />
 <link rel="icon" type="image/svg+xml" href="icon.svg" />
 <link rel="stylesheet" href="style.css" />
@@ -45,21 +45,21 @@
       <div class="feature">
         <div class="feature-emoji">🎙</div>
         <h3>Voice → Text</h3>
-        <p>Hold Right ⌘, speak, release. Text is pasted at your cursor wherever you are — Slack, mail, code, anywhere.</p>
+        <p>Hold Right ⌘ and speak. Text appears at your cursor while you are still talking and is corrected when you let go — Slack, mail, code, anywhere.</p>
         <p class="feature-foot">WhisperKit (CoreML) · runs on Apple Neural Engine</p>
       </div>
 
       <div class="feature">
         <div class="feature-emoji">🌐</div>
-        <h3>Translate selection</h3>
-        <p>Select any text in any app, tap Right ⌥. A floating overlay shows the translation. One click copies it.</p>
-        <p class="feature-foot">Chinese ↔ English · handles mixed-language text</p>
+        <h3>Translate or note a selection</h3>
+        <p>Select any text in any app, tap Right ⌥, pick Translate or Note. A note remembers the page or document it came from — one click takes you back, scrolled to the words you selected.</p>
+        <p class="feature-foot">Chinese ↔ English · tap again to translate straight away</p>
       </div>
 
       <div class="feature">
         <div class="feature-emoji">📜</div>
         <h3>History</h3>
-        <p>Every transcription, translation, screenshot and recording is saved locally. Search, filter by type, hover a screenshot to preview it, copy or delete.</p>
+        <p>Every transcription, translation, note, screenshot and recording is saved locally. Search, filter by type, go back to where a note was made, hover a screenshot to preview it, copy or delete.</p>
         <p class="feature-foot">SQLite · stored in <code>~/Library/Application Support/Znote/</code></p>
       </div>
 
@@ -84,7 +84,7 @@
         <tr><td><kbd>Right ⌘</kbd> hold</td><td>Voice → Text (push-to-talk)</td></tr>
         <tr><td><kbd>Right ⌘</kbd> tap</td><td>Toggle History window</td></tr>
         <tr><td><kbd>Right ⌥</kbd> hold</td><td>Voice → English (speak any language)</td></tr>
-        <tr><td><kbd>Right ⌥</kbd> tap</td><td>Translate selected text</td></tr>
+        <tr><td><kbd>Right ⌥</kbd> tap</td><td>Selected text → Translate / Note (tap again to translate)</td></tr>
         <tr><td><kbd>Right ⌥</kbd> double-tap</td><td>Region capture → capture, annotate or record</td></tr>
       </tbody>
     </table>
