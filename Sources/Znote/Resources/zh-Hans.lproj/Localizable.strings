@@ -17,7 +17,7 @@
 "hotkey.action.voice_input" = "语音输入";
 "hotkey.action.voice_translate" = "语音 → 英文";
 "hotkey.action.toggle_history" = "切换历史";
-"hotkey.action.translate" = "翻译选区";
+"hotkey.action.translate" = "划词：翻译 / 笔记";
 "hotkey.action.screenshot" = "截图";
 
 /* ── 录音 / 浮层 ────────────────────────────────────────── */
@@ -56,6 +56,7 @@
 "history.filter.translation" = "翻译";
 "history.filter.screenshot" = "截图";
 "history.filter.recording" = "录屏";
+"history.filter.note" = "笔记";
 "history.count" = "%d 条";
 "history.copied" = "已复制!";
 "history.file_missing_short" = "文件缺失";
@@ -85,6 +86,8 @@
 
 "settings.general.launch_at_login" = "开机启动";
 "settings.general.launch_at_login.hint" = "登录系统时自动启动 Znote。";
+"settings.general.live_dictation" = "边说边输入";
+"settings.general.live_dictation.hint" = "说话时文字实时出现并随识别修正。关闭后松开按键才一次写入。";
 
 "settings.language.hint.none" = "未选择语言 —— Whisper 将自动识别";
 "settings.language.hint.single" = "→ %@ —— 准确度最佳";
@@ -133,3 +136,13 @@
 "editor.redo" = "重做";
 "editor.cancel" = "放弃截图";
 "editor.done" = "完成并复制";
+
+// Selection menu and notes
+"selection.translate" = "翻译";
+"selection.note" = "笔记";
+"note.placeholder" = "写点什么…（可以留空）";
+"note.hint" = "↵ 保存   ⇧↵ 换行   esc 取消";
+"note.save" = "保存";
+"note.saved" = "已保存 ✓";
+"button.go_to_source" = "回到原处";
+"history.source_failed" = "打不开来源";

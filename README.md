@@ -1,6 +1,6 @@
 # Znote
 
-Native macOS menu bar app for voice-to-text, voice → English translation, screen capture (screenshot + recording), and translation of selected text. 100% on-device speech via [WhisperKit](https://github.com/argmaxinc/WhisperKit) — no cloud APIs, no subscriptions, no Python.
+Native macOS menu bar app for voice-to-text, voice → English translation, screen capture (screenshot + recording), translation of selected text, and notes on anything you select — each remembering where it came from. 100% on-device speech via [WhisperKit](https://github.com/argmaxinc/WhisperKit) — no cloud APIs, no subscriptions, no Python.
 
 🌐 [Project site](https://nicetooo.github.io/Znote/) · 📥 [Latest release](https://github.com/nicetooo/Znote/releases/latest)
 
@@ -8,15 +8,16 @@ Native macOS menu bar app for voice-to-text, voice → English translation, scre
 
 | Shortcut | Action |
 |----------|--------|
-| **Hold Right ⌘** | Push-to-talk → transcribes speech → pastes text at cursor |
+| **Hold Right ⌘** | Push-to-talk → transcribes speech → text appears at the cursor as you speak, corrected on release |
 | **Tap Right ⌘** | Toggle History window |
 | **Hold Right ⌥** | Push-to-talk → translates speech to English → pastes |
-| **Tap Right ⌥** | Translate selected text (auto-detected source ↔ English/Chinese) |
+| **Tap Right ⌥** | Selection menu: **Translate** the selected text, or write a **Note** about it (tap again = Translate) |
 | **Double-tap Right ⌥** | Region capture → pick 📷 Capture, ✏️ Annotate or 🎥 Record |
 
 All hotkeys are rebindable in Settings — pick side, modifier, and gesture per action.
 
 - **Voice → text**: WhisperKit (CoreML) on the Apple Neural Engine / GPU. Multi-language, with optional language pinning for best accuracy.
+- **Type while speaking**: text is written while you are still holding the key — a new chunk every couple of seconds — and corrected into the final result when you let go. Only where the cursor is in a text field; elsewhere, and with the option off in Settings, the text is pasted once on release.
 - **Voice → English** *(any language)*: Same push-to-talk flow but Whisper runs `task=translate` — speak Chinese / Japanese / French / etc., get English. Requires Large V3 (Turbo doesn't support translate).
 - **Region capture**: Drag a rectangle (works across external displays), then a small picker asks Capture, Annotate or Record.
   - Keyboard: **↵** = Capture, **E** = Annotate, **R** = Record, **ESC** = cancel
@@ -24,7 +25,8 @@ All hotkeys are rebindable in Settings — pick side, modifier, and gesture per 
   - Screenshot → PNG saved to disk + image on the clipboard
   - Recording → MOV (H.264 video + AAC system audio) via ScreenCaptureKit; the floating stop pill in the corner finalizes the file
 - **Translation overlay**: Google Translate free endpoint. Chinese → English, everything else → Chinese; mixed Chinese/English text is handled (direction is decided from which language supplies the sentence's grammar). Result floats in a dark panel with a Copy button.
-- **History**: SQLite + on-disk media. Filter pills: All / Voice / Translation / Screenshot / Recording. Hovering a screenshot row shows a preview beside the panel; expanded rows show inline previews, recordings play in an embedded AVPlayer, the Folder button reveals media in Finder.
+- **Notes on a selection**: select text anywhere, tap Right ⌥, pick Note. Znote keeps the text, what you wrote, and where you were — app, window title, and the page or document address. In History, **Go to source** (or a double-click) takes you back: a web page reopens in the same browser scrolled to the selected text and highlighted; a document reopens in its app with the text ready for ⌘G. Works with the Accessibility permission the app already has.
+- **History**: SQLite + on-disk media. Filter pills: All / Voice / Translation / Screenshot / Recording / Notes. Hovering a screenshot row shows a preview beside the panel; expanded rows show inline previews, recordings play in an embedded AVPlayer, the Folder button reveals media in Finder.
 
 ## Requirements
 
@@ -105,10 +107,15 @@ Sources/
     ├── AudioRecorder.swift        # AVAudioEngine + RMS level
     ├── WhisperService.swift       # WhisperKit transcribe / translate
     ├── HallucinationFilter.swift  # Strips Whisper's trailing "Thank you."-style hallucinations
+    ├── LiveDictation.swift        # Type while speaking: preview loop, edit diffing, focus gate
     ├── TranslationService.swift   # Direction planning + Google Translate
     ├── SystemIntegration.swift    # Cmd+C/V simulation + clipboard save/restore
     ├── RecordingOverlay.swift     # Waveform animation panel (+ "→ English" hint)
     ├── TranslationOverlay.swift   # Translation result panel
+    ├── SelectionSource.swift      # Where a selection was made (app, window, page/document)
+    ├── SelectionMenu.swift        # Translate / Note menu
+    ├── NoteInputPanel.swift       # Note input
+    ├── TextFragment.swift         # Scroll-to-text links, going back to a source
     ├── RegionSelector.swift       # Multi-display region selector (dim + crosshair + W×H label)
     ├── CaptureActionPicker.swift  # 📷 Capture / ✏️ Annotate / 🎥 Record / ✕ picker, ↵/E/R/ESC shortcuts
     ├── AnnotationDocument.swift   # Screenshot annotations: model, undo/redo, drawing, PNG export

@@ -15,6 +15,7 @@ extension SelfTest {
     /// Main-thread-only record of fired callbacks.
     private final class Fired {
         var events: [String] = []
+        var otherKeys = 0
     }
 
     static func runHotkeys(_ r: inout Report) async {
@@ -30,6 +31,7 @@ extension SelfTest {
             monitor.onToggleHistory = { fired.events.append("toggleHistory") }
             monitor.onTranslate = { fired.events.append("translate") }
             monitor.onScreenshot = { fired.events.append("screenshot") }
+            monitor.onOtherKeyDown = { fired.otherKeys += 1 }
             monitor.reloadBindings()   // default bindings from the isolated store
         }
 
@@ -119,6 +121,35 @@ extension SelfTest {
             await wait(600)
             await modifiers(0)
         }
+
+        // ── Keys Znote presses itself while the hotkey is held (live dictation) ──
+        await MainActor.run { fired.otherKeys = 0 }
+        await check("Znote's own backspace and ⌘V during a hold don't end it", ["voiceDown", "voiceUp"]) {
+            await modifiers(rightCmd)
+            await wait(600)
+            await MainActor.run {
+                // As posted for real: no modifiers on the backspace, plain ⌘
+                // on the V — neither carries the right-⌘ bit that is "held".
+                for (key, command) in [(SystemIntegration.keyBackspace, false), (CGKeyCode(9), true)] {
+                    if let e = SystemIntegration.keyEvent(key, down: true, command: command) {
+                        monitor.handleEvent(type: .keyDown, event: e)
+                    }
+                }
+            }
+            await wait(100)
+            await checkNow("…the recording is still going after them", ["voiceDown"])
+            await modifiers(0)
+        }
+        let ownKeysReported = await MainActor.run { fired.otherKeys }
+        steps.append(("Znote's own keys are not reported as the user's", ownKeysReported == 0, ["reported": "\(ownKeysReported)"]))
+        await check("the user's own key during a hold is reported", ["voiceDown", "voiceUp"]) {
+            await modifiers(rightCmd)
+            await wait(600)
+            await typeKey(holding: rightCmd)
+            await modifiers(0)
+        }
+        let userKeysReported = await MainActor.run { fired.otherKeys }
+        steps.append(("…exactly once", userKeysReported == 1, ["reported": "\(userKeysReported)"]))
 
         // ── Self-healing when the system drops events ──
         await check("lost release, healed by the next key press", ["voiceDown", "voiceUp"]) {

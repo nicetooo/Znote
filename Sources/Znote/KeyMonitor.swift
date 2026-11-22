@@ -13,6 +13,8 @@ class KeyMonitor {
     var onToggleHistory: (() -> Void)?        // tap
     var onTranslate: (() -> Void)?            // tap
     var onScreenshot: (() -> Void)?           // double-tap
+    /// The user pressed an ordinary key (not one Znote posted itself).
+    var onOtherKeyDown: (() -> Void)?
 
     // MARK: - Thresholds
     private let tapThreshold: TimeInterval = 0.3
@@ -129,6 +131,14 @@ class KeyMonitor {
             log("KeyMonitor: first event received — Input Monitoring OK")
         }
 
+        // Keys Znote presses itself (⌘C, ⌘V, the backspaces of live
+        // dictation) say nothing about the keyboard: their flags are what
+        // the key needs, not what is held. Synced from, the first backspace
+        // of a dictation would read as "hotkey released" and end it.
+        if type == .keyDown, event.getIntegerValueField(.eventSourceUserData) == SystemIntegration.syntheticEventTag {
+            return
+        }
+
         if type == .flagsChanged {
             // Sync state of ALL tracked physical keys from the flags field, not
             // just the one matching keyCode. The `flags` bitmask reflects the
@@ -158,6 +168,7 @@ class KeyMonitor {
             for state in states.values where state.isDown {
                 state.otherKeyPressed = true
             }
+            onOtherKeyDown?()
         }
     }
 

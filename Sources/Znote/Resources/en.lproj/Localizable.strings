@@ -20,7 +20,7 @@
 "hotkey.action.voice_input" = "Voice Input";
 "hotkey.action.voice_translate" = "Voice → English";
 "hotkey.action.toggle_history" = "Toggle History";
-"hotkey.action.translate" = "Translate Selection";
+"hotkey.action.translate" = "Selection: Translate / Note";
 "hotkey.action.screenshot" = "Screenshot";
 
 /* ── Recording / overlay messages ───────────────────────── */
@@ -59,6 +59,7 @@
 "history.filter.translation" = "Translation";
 "history.filter.screenshot" = "Screenshot";
 "history.filter.recording" = "Recording";
+"history.filter.note" = "Notes";
 "history.count" = "%d items";
 "history.copied" = "Copied!";
 "history.file_missing_short" = "File missing";
@@ -88,6 +89,8 @@
 
 "settings.general.launch_at_login" = "Launch at Login";
 "settings.general.launch_at_login.hint" = "Start Znote automatically when you log in.";
+"settings.general.live_dictation" = "Type While Speaking";
+"settings.general.live_dictation.hint" = "Text appears as you speak and is corrected as you go. Off: once, on release.";
 
 "settings.language.hint.none" = "No language selected — Whisper will auto-detect";
 "settings.language.hint.single" = "→ %@ — best accuracy";
@@ -136,3 +139,13 @@
 "editor.redo" = "Redo";
 "editor.cancel" = "Discard screenshot";
 "editor.done" = "Done — copy to clipboard";
+
+// Selection menu and notes
+"selection.translate" = "Translate";
+"selection.note" = "Note";
+"note.placeholder" = "Add a note (optional)…";
+"note.hint" = "↵ save   ⇧↵ new line   esc cancel";
+"note.save" = "Save";
+"note.saved" = "Saved ✓";
+"button.go_to_source" = "Go to source";
+"history.source_failed" = "Couldn't open the source";

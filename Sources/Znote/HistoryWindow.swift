@@ -114,6 +114,66 @@ private class DarkActionButton: NSView {
     }
 }
 
+/// The "↗ where this came from" line of an expanded row. With `onClick` set
+/// it is a link — blue, underlined under the pointer, pointing-hand cursor;
+/// without, plain grey text.
+final class SourceLinkView: NSView {
+    private let text: String
+    var onClick: (() -> Void)? { didSet { needsDisplay = true; window?.invalidateCursorRects(for: self) } }
+    private var hovered = false
+
+    init(text: String) {
+        self.text = text
+        super.init(frame: .zero)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private var attributes: [NSAttributedString.Key: Any] {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        var attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .paragraphStyle: style]
+        if onClick == nil {
+            attributes[.foregroundColor] = NSColor(white: 0.5, alpha: 1)
+        } else {
+            attributes[.foregroundColor] = hovered
+                ? NSColor(red: 0.66, green: 0.80, blue: 1.0, alpha: 1)
+                : NSColor(red: 0.50, green: 0.68, blue: 1.0, alpha: 1)
+            if hovered { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        }
+        return attributes
+    }
+
+    /// As wide as its text, so only the words are clickable — not the whole row.
+    override var intrinsicContentSize: NSSize {
+        let size = (text as NSString).size(withAttributes: attributes)
+        return NSSize(width: ceil(size.width) + 2, height: ceil(size.height))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        (text as NSString).draw(with: bounds, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                                attributes: attributes)
+    }
+
+    override func resetCursorRects() {
+        if onClick != nil { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+
+    // A link keeps its clicks; plain text lets the row have them.
+    override func mouseDown(with event: NSEvent) {
+        if onClick == nil { super.mouseDown(with: event) }
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard let onClick else { return super.mouseUp(with: event) }
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick() }
+    }
+}
+
 // MARK: - History Window Controller
 
 class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
@@ -131,6 +191,10 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
     private var folderBtn: DarkActionButton?
     private var folderBtnWidth: NSLayoutConstraint?
     private var folderBtnLeading: NSLayoutConstraint?
+    /// "Go to source": shown while the selected row knows where it came from.
+    private var sourceBtn: DarkActionButton?
+    private var sourceBtnWidth: NSLayoutConstraint?
+    private var sourceBtnLeading: NSLayoutConstraint?
     /// Active inline video player, retained so we can pause it when collapsing
     /// the row or closing the panel.
     private var activeVideoPlayer: AVPlayer?
@@ -152,7 +216,19 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         showHistory()
     }
 
-    func showHistory() {
+    /// How "Go to source" is carried out; the self-test substitutes a recorder.
+    var performRestore: (SourceRestorer.Action) -> Bool = { SourceRestorer.perform($0) }
+
+    // For the self-test.
+    var window: NSWindow? { panel }
+    var rowCount: Int { records.count }
+    var sourceButton: NSView? { sourceBtn }
+    func record(atRow row: Int) -> HistoryRecord? { row >= 0 && row < records.count ? records[row] : nil }
+    func selectFilter(_ filter: HistoryTypeFilter) { typeFilterTapped(filter.rawValue) }
+
+    /// - Parameter live: false for the self-test — the panel is built but not
+    ///   ordered in, Znote is not activated and no keys are watched.
+    func showHistory(live: Bool = true) {
         if let p = panel {
             p.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -177,10 +253,14 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         p.delegate = self
         p.contentView = buildContent(w, h)
         p.center()
+        self.panel = p
+        guard live else {
+            reloadData()
+            return
+        }
 
         p.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        self.panel = p
 
         setupKeyMonitor()
         reloadData()
@@ -276,6 +356,7 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
             L("history.filter.translation"),
             L("history.filter.screenshot"),
             L("history.filter.recording"),
+            L("history.filter.note"),
         ]
         for (i, label) in pillLabels.enumerated() {
             let pill = PillToggle(title: label, selected: i == 0)
@@ -360,6 +441,13 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         bar.addSubview(folderBtn)
         self.folderBtn = folderBtn
 
+        let sourceBtn = DarkActionButton(title: L("button.go_to_source"))
+        sourceBtn.onClick = { [weak self] in self?.goToSource() }
+        sourceBtn.translatesAutoresizingMaskIntoConstraints = false
+        sourceBtn.isHidden = true
+        bar.addSubview(sourceBtn)
+        self.sourceBtn = sourceBtn
+
         let count = NSTextField(labelWithString: "")
         count.font = .systemFont(ofSize: 11)
         count.textColor = NSColor(white: 0.45, alpha: 1.0)
@@ -383,9 +471,18 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         let folderWidth = folderBtn.widthAnchor.constraint(equalToConstant: 64)
         self.folderBtnLeading = folderLeading
         self.folderBtnWidth = folderWidth
+        // Same trick for "Go to source", which follows the selected row.
+        let sourceLeading = sourceBtn.leadingAnchor.constraint(equalTo: folderBtn.trailingAnchor, constant: 0)
+        let sourceWidth = sourceBtn.widthAnchor.constraint(equalToConstant: 0)
+        self.sourceBtnLeading = sourceLeading
+        self.sourceBtnWidth = sourceWidth
 
         NSLayoutConstraint.activate([
             folderLeading, folderWidth,
+            sourceLeading, sourceWidth,
+            sourceBtn.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            sourceBtn.heightAnchor.constraint(equalToConstant: 28),
+            count.leadingAnchor.constraint(greaterThanOrEqualTo: sourceBtn.trailingAnchor, constant: 8),
             title.topAnchor.constraint(equalTo: root.topAnchor, constant: pad),
             title.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad),
 
@@ -458,6 +555,67 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         countLabel?.stringValue = L("history.count", records.count)
         emptyLabel?.isHidden = !records.isEmpty
         updateFolderButtonVisibility()
+        updateSourceButtonVisibility()
+    }
+
+    /// The single selected record, if exactly one row is selected.
+    private var selectedRecord: HistoryRecord? {
+        guard let selected = tableView?.selectedRowIndexes, selected.count == 1,
+              let index = selected.first, index < records.count else { return nil }
+        return records[index]
+    }
+
+    private func updateSourceButtonVisibility() {
+        let show = selectedRecord?.restoreAction != nil
+        let title = L("button.go_to_source")
+        let width = ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width) + 24
+        sourceBtn?.isHidden = !show
+        sourceBtnWidth?.constant = show ? width : 0
+        sourceBtnLeading?.constant = show ? 8 : 0
+    }
+
+    /// Take the user back to where a note or translation was made — the
+    /// given record, or the selected one.
+    private func goToSource(_ record: HistoryRecord? = nil) {
+        guard let record = record ?? selectedRecord, let action = record.restoreAction else { return }
+        if performRestore(action) {
+            hideHistory()       // the panel floats; it would sit on top of where we just went
+        } else {
+            flashCount(L("history.source_failed"))
+        }
+    }
+
+    /// Show a short message where the row count is, then put the count back.
+    private func flashCount(_ message: String) {
+        countLabel?.stringValue = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self else { return }
+            self.countLabel?.stringValue = L("history.count", self.records.count)
+        }
+    }
+
+    /// The line under an expanded row saying where the record came from,
+    /// or nil when that isn't known.
+    private func sourceLine(for record: HistoryRecord) -> String? {
+        guard let label = record.source?.label, !label.isEmpty else { return nil }
+        return "↗ " + label
+    }
+    private static let sourceLineHeight: CGFloat = 18
+    private static let sourceLineGap: CGFloat = 4
+
+    /// A row's text, with a note's quoted selection toned down.
+    private func styledRowText(for record: HistoryRecord) -> NSAttributedString {
+        let whole = record.displayText
+        let styled = NSMutableAttributedString(string: whole, attributes: [
+            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.white,
+        ])
+        if record.type == .note, let note = record.note, !note.isEmpty {
+            let quote = (whole as NSString).range(of: "“\(record.outputText)”")
+            if quote.location != NSNotFound {
+                styled.addAttribute(.foregroundColor, value: NSColor(white: 0.62, alpha: 1), range: quote)
+            }
+        }
+        return styled
     }
 
     /// Folder button is visible whenever media might be on screen — All,
@@ -517,7 +675,9 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: attrs
         )
-        return max(rect.height + 34, 50)
+        let sourceHeight = sourceLine(for: record) == nil
+            ? 0 : HistoryWindowController.sourceLineGap + HistoryWindowController.sourceLineHeight
+        return max(rect.height + sourceHeight + 34, 50)
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -545,6 +705,9 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         case .recording:
             symbolName = "video.fill"
             tint = NSColor(red: 0.85, green: 0.45, blue: 0.95, alpha: 1.0)  // purple
+        case .note:
+            symbolName = "note.text"
+            tint = NSColor(red: 0.98, green: 0.80, blue: 0.30, alpha: 1.0)  // yellow
         }
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
         if let img = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) {
@@ -554,9 +717,10 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         cell.addSubview(iconView)
 
         // --- Text ---
-        let text = NSTextField(wrappingLabelWithString: record.displayText)
+        let text = NSTextField(wrappingLabelWithString: "")
         text.font = .systemFont(ofSize: 13)
         text.textColor = .white
+        text.attributedStringValue = styledRowText(for: record)
         text.drawsBackground = false
         text.isBordered = false
         text.isSelectable = false
@@ -672,6 +836,21 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
                     missing.centerYAnchor.constraint(equalTo: mediaView.centerYAnchor),
                 ])
             }
+        } else if isExpanded, let line = sourceLine(for: record) {
+            // Where it came from: a link when there is a way back.
+            let link = SourceLinkView(text: line)
+            if record.restoreAction != nil {
+                link.onClick = { [weak self] in self?.goToSource(record) }
+            }
+            link.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(link)
+            NSLayoutConstraint.activate([
+                link.leadingAnchor.constraint(equalTo: text.leadingAnchor),
+                link.trailingAnchor.constraint(lessThanOrEqualTo: text.trailingAnchor),
+                link.topAnchor.constraint(equalTo: text.bottomAnchor, constant: HistoryWindowController.sourceLineGap),
+                link.heightAnchor.constraint(equalToConstant: HistoryWindowController.sourceLineHeight),
+                link.bottomAnchor.constraint(lessThanOrEqualTo: sep.topAnchor, constant: -8),
+            ])
         } else {
             text.bottomAnchor.constraint(lessThanOrEqualTo: sep.topAnchor, constant: -10).isActive = true
         }
@@ -683,7 +862,13 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
 
     @objc private func rowClicked() {
         guard let table = tableView else { return }
-        let clicked = table.clickedRow
+        toggleRow(table.clickedRow)
+    }
+
+    /// Expand `clicked` (collapsing whichever row was open), or collapse it
+    /// if it was the open one.
+    func toggleRow(_ clicked: Int) {
+        guard let table = tableView else { return }
         guard clicked >= 0, clicked < records.count else { return }
 
         // Stop any inline video that's about to be torn down by the reload.
@@ -722,13 +907,19 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
         } else {
             table.deselectAll(nil)
         }
+        updateSourceButtonVisibility()
     }
 
     @objc private func rowDoubleClicked() {
         // For recordings, double-click opens in QuickTime / default player —
-        // more useful than copying. Other types: keep copy behavior.
+        // more useful than copying. A note goes back to where it was taken.
+        // Other types: keep copy behavior.
         if let table = tableView, table.clickedRow >= 0, table.clickedRow < records.count {
             let r = records[table.clickedRow]
+            if r.type == .note, let action = r.restoreAction {
+                if performRestore(action) { hideHistory() } else { flashCount(L("history.source_failed")) }
+                return
+            }
             if r.type == .recording, let path = r.imagePath,
                FileManager.default.fileExists(atPath: path) {
                 NSWorkspace.shared.open(URL(fileURLWithPath: path))
@@ -914,9 +1105,6 @@ class HistoryWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource
             log("History: copied \(texts.count) items")
         }
 
-        countLabel?.stringValue = copiedLabel
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.countLabel?.stringValue = "\(self?.records.count ?? 0) items"
-        }
+        flashCount(copiedLabel)
     }
 }

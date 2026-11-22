@@ -18,7 +18,8 @@ class TranslationOverlay: NSObject {
 
     // MARK: - Show Loading (call immediately on Right ⌥ tap)
 
-    func showLoading() {
+    /// - Parameter near: where to put it; the pointer's position by default.
+    func showLoading(near point: NSPoint? = nil) {
         hide()
         dismissed = false
 
@@ -42,7 +43,7 @@ class TranslationOverlay: NSObject {
         p.contentView = container
 
         // Position near mouse and save anchor point
-        let mouse = NSEvent.mouseLocation
+        let mouse = point ?? NSEvent.mouseLocation
         positionPanel(p, nearMouse: mouse)
         savedTopCenter = NSPoint(
             x: p.frame.midX,

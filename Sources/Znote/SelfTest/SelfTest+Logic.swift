@@ -87,9 +87,147 @@ extension SelfTest {
         }
 
         runHotkeySettings(&r)
+        runLiveText(&r)
         runHallucinationFilter(&r)
         runTranslationDirection(&r)
         runLocalization(&r)
+    }
+
+    // MARK: - Live dictation
+
+    /// Stands in for wherever live text is written: carries the edits out on
+    /// a string, and notes any that asked to delete something that isn't there.
+    final class LiveDocument: LiveTextSink {
+        var text = ""
+        var edits: [LiveEdit] = []
+        var mismatches = 0
+
+        func apply(_ edit: LiveEdit) {
+            edits.append(edit)
+            if text.hasSuffix(edit.deleted) {
+                text.removeLast(edit.deleted.count)
+            } else {
+                mismatches += 1
+            }
+            text += edit.inserted
+        }
+    }
+
+    private static func runLiveText(_ r: inout Report) {
+        r.expect("default: live dictation on", Settings.shared.liveDictation, true)
+
+        // (written, target, deleted, inserted)
+        let edits: [(String, String, String, String)] = [
+            ("", "hello", "", "hello"),
+            ("hello", "hello", "", ""),
+            ("hello wor", "hello world today", "", "ld today"),
+            ("I sent the fire", "I sent the file to you", "re", "le to you"),
+            ("今天下午我们开回", "今天下午我们开会，会后", "回", "会，会后"),
+            ("hello world", "", "hello world", ""),
+            ("发布 release note", "发布 release notes 到群里", "", "s 到群里"),
+            ("ok 👍🏽 done", "ok 👍 done", "👍🏽 done", "👍 done"),     // one backspace per visible character
+            ("Thank you", "今天", "Thank you", "今天"),
+        ]
+        for (written, target, deleted, inserted) in edits {
+            r.expect("live edit: \"\(written)\" → \"\(target)\"",
+                     LiveText.edit(from: written, to: target), LiveEdit(deleted: deleted, inserted: inserted))
+        }
+
+        for (hypothesis, want) in [
+            ("I will send the file.", "I will send the file"),
+            ("我们今天就先讨论到这里。", "我们今天就先讨论到这里"),
+            ("Wait... ", "Wait"),
+            ("version 2.0", "version 2.0"),
+            ("first, second,", "first, second"),
+            ("。", ""),
+        ] {
+            r.expect("live preview \"\(hypothesis)\" is written without its closing punctuation",
+                     LiveText.interim(hypothesis), want)
+        }
+
+        // A new preview keeps what is written where only punctuation, spacing
+        // or capitals changed. (written, preview, what is written next)
+        let settled: [(String, String, String)] = [
+            ("", "hello", "hello"),
+            ("今天下午开会", "今天下午开会，会后", "今天下午开会，会后"),
+            ("发布计划,会后我把", "发布计划会后我把release", "发布计划,会后我把release"),            // the comma came and went
+            ("会后我把release notes", "会后我把Release Notes发到群里", "会后我把release notes发到群里"),  // capitals
+            ("release notes 发到群里", "release notes发到群里大家", "release notes 发到群里大家"),      // spacing
+            ("I think the second sentence", "I think the second section needs", "I think the second section needs"),  // a word did change
+            ("abc def", "abc, xyz", "abc, xyz"),                                                        // …and the new punctuation comes with it
+            ("I will send the file to you", "I will send the file", "I will send the file"),            // the preview says less
+            ("Thank you", "今天", "今天"),
+        ]
+        for (written, preview, want) in settled {
+            r.expect("live preview \"\(preview)\" over \"\(written)\"", LiveText.settled(written: written, preview: preview), want)
+        }
+        let commaDocument = LiveDocument()
+        let softTyper = LiveTyper(sink: commaDocument)
+        softTyper.update(to: "发布计划,会后我把")
+        softTyper.update(to: "发布计划会后我把Release Notes")
+        softTyper.update(to: "发布计划,会后我把release notes发到群里")
+        r.step("live typer: a comma or capital that comes and goes costs no backspaces",
+               ok: commaDocument.edits.allSatisfy { $0.deleted.isEmpty } && commaDocument.text == "发布计划,会后我把Release Notes发到群里",
+               ["text": commaDocument.text])
+        softTyper.finish(with: "发布计划，会后我把 release notes 发到群里。")
+        r.expect("live typer: the final text is still written exactly", commaDocument.text, "发布计划，会后我把 release notes 发到群里。")
+
+        // Previews, then the final text: the document follows each one.
+        let document = LiveDocument()
+        let typer = LiveTyper(sink: document)
+        var followed = true
+        for preview in ["I will", "I will send the fire", "I will send the file to", "I will send the file to you"] {
+            typer.update(to: preview)
+            followed = followed && document.text == preview
+        }
+        typer.update(to: "I will send the file to you")          // nothing new: nothing written
+        typer.finish(with: "I will send the file to you.")
+        r.step("live typer: the document follows every preview and ends as the final text",
+               ok: followed && document.text == "I will send the file to you." && document.mismatches == 0,
+               ["edits": "\(document.edits.count)"])
+        r.expect("live typer: an unchanged preview writes nothing", typer.updates, 5)
+
+        // Nothing was said after all (the final pass found only silence).
+        let silent = LiveDocument()
+        let silentTyper = LiveTyper(sink: silent)
+        silentTyper.update(to: "Thank you")
+        silentTyper.finish(with: "")
+        r.expect("live typer: an empty result takes back what was written", silent.text, "")
+
+        // The user clicked or typed part-way: nothing more is deleted.
+        let touched = LiveDocument()
+        let touchedTyper = LiveTyper(sink: touched)
+        touchedTyper.update(to: "send the fire")
+        touchedTyper.disturb()
+        touchedTyper.update(to: "send the file to")
+        r.expect("live typer: after the user steps in, previews are no longer written", touched.text, "send the fire")
+        touchedTyper.finish(with: "send the file to you.")
+        r.step("live typer: …and the end is only added, never taken back",
+               ok: touched.text == "send the firele to you." && touched.edits.allSatisfy { $0.deleted.isEmpty },
+               ["text": touched.text])
+
+        // Where corrections (backspaces) are safe.
+        // (role, has a text selection, allowed)
+        let targets: [(String?, Bool, Bool)] = [
+            ("AXTextArea", true, true),
+            ("AXTextField", true, true),
+            ("AXComboBox", true, true),
+            ("AXGroup", true, true),            // a web editor that calls itself a group
+            ("AXWebArea", false, true),         // the page itself: a backspace does nothing
+            ("AXWindow", false, true),          // the app names no control
+            (nil, false, true),                 // the app doesn't answer
+            ("AXTable", false, false),          // a list of mail: backspace deletes
+            ("AXOutline", false, false),
+            ("AXList", false, false),
+            ("AXRow", false, false),
+            ("AXButton", false, false),
+            ("AXGroup", false, false),
+            ("AXUnknown", false, false),
+        ]
+        for (role, editsText, allowed) in targets {
+            r.expect("live target: \(role ?? "no answer")\(editsText ? " with a text selection" : "")",
+                     LiveTarget.verdict(role: role, editsText: editsText).allowed, allowed)
+        }
     }
 
     // MARK: - Hotkey bindings

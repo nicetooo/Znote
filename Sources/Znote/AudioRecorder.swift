@@ -28,6 +28,36 @@ class AudioRecorder {
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
 
+    /// The recording so far, kept in memory as well (mono, at the hardware
+    /// sample rate) so it can be transcribed while it is still being made.
+    /// Appended on the audio thread, read by the live-dictation loop.
+    struct Snapshot {
+        let samples: [Float]
+        let sampleRate: Double
+        let peak: Float
+        var duration: TimeInterval { sampleRate > 0 ? Double(samples.count) / sampleRate : 0 }
+    }
+    private var liveSamples: [Float] = []
+    private var liveSampleRate: Double = 0
+    private let sampleLock = NSLock()
+    /// Past this the memory copy stops growing (the file doesn't), and with
+    /// it the live preview. Ten minutes of mono floats is about 115 MB.
+    static let liveSecondsLimit: TimeInterval = 600
+
+    func snapshot() -> Snapshot {
+        sampleLock.lock()
+        defer { sampleLock.unlock() }
+        return Snapshot(samples: liveSamples, sampleRate: liveSampleRate, peak: peakLevel)
+    }
+
+    private func keep(_ buffer: AVAudioPCMBuffer) {
+        guard let channel = buffer.floatChannelData?[0] else { return }
+        sampleLock.lock()
+        defer { sampleLock.unlock() }
+        guard Double(liveSamples.count) < liveSampleRate * AudioRecorder.liveSecondsLimit else { return }
+        liveSamples.append(contentsOf: UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+    }
+
     /// Whether the last recording had enough speech to be worth transcribing
     var hasMeaningfulAudio: Bool {
         let duration = recordingDuration
@@ -61,6 +91,11 @@ class AudioRecorder {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let hardwareFormat = inputNode.outputFormat(forBus: 0)
+
+        sampleLock.lock()
+        liveSamples.removeAll(keepingCapacity: true)
+        liveSampleRate = hardwareFormat.sampleRate
+        sampleLock.unlock()
 
         // Create output file — write as 16-bit PCM WAV at hardware sample rate.
         // WhisperKit resamples to 16 kHz itself.
@@ -96,12 +131,14 @@ class AudioRecorder {
             if level > self.peakLevel { self.peakLevel = level }
             self.onAudioLevel?(level)
 
-            // Write to file
+            // Write to file, and keep the same samples in memory
             if hardwareFormat.channelCount > 1 {
                 guard let monoBuffer = self.mixToMono(buffer: buffer) else { return }
                 try? file.write(from: monoBuffer)
+                self.keep(monoBuffer)
             } else {
                 try? file.write(from: buffer)
+                self.keep(buffer)
             }
         }
 

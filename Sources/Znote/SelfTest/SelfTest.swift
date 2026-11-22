@@ -14,9 +14,11 @@ import Foundation
 ///   hotkeys   KeyMonitor's gesture state machine, fed synthetic events
 ///   clipboard SystemIntegration's ⌘C / ⌘V clipboard borrowing, on a private pasteboard
 ///   editor    screenshot annotation + History hover preview, rendered off screen
+///   notes     selection menu, note panel, scroll-to-text links, where-it-came-from, note storage
 ///   voice     seeded WAVs through the real WhisperService
 ///   translate TranslationService against Google (needs network)
 ///   bench     character error rate + speed of one model (a measurement, not a verdict)
+///   context   what real apps on this Mac say about where they are (a diagnostic; needs Znote's permissions)
 enum SelfTest {
     struct Request {
         let scenario: String
@@ -97,9 +99,29 @@ enum SelfTest {
             }
             report.steps += onMain.steps
             report.errors += onMain.errors
+        case "notes":
+            let scenario = report.scenario
+            let onMain: Report = await MainActor.run {
+                var local = Report(scenario: scenario)
+                runNotes(request, &local)
+                return local
+            }
+            report.steps += onMain.steps
+            report.errors += onMain.errors
         case "voice": await runVoice(request, &report)
         case "bench": await runBench(request, &report)
         case "translate": runTranslate(&report)
+        case "context":
+            // Shows a real panel and pumps real events: main thread only.
+            let scenario = report.scenario
+            let onMain: Report = await MainActor.run {
+                var local = Report(scenario: scenario)
+                runContext(&local)
+                return local
+            }
+            report.steps += onMain.steps
+            report.errors += onMain.errors
+            report.env.merge(onMain.env) { $1 }
         default: report.errors.append("unknown scenario '\(request.scenario)'")
         }
 

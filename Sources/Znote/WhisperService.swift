@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreML
 import Foundation
 import NaturalLanguage
@@ -68,34 +69,8 @@ class WhisperService {
             return nil
         }
 
-        // Build decoding options
         let forcedLang = Settings.shared.whisperLanguageArg
-        var options = DecodingOptions()
-        // In translate mode we let Whisper auto-detect the source language —
-        // forcing the source here also works, but auto is more robust when the
-        // user holds the translate hotkey and switches between Chinese / French
-        // / etc. without changing Settings.
-        if translate {
-            options.task = .translate
-            options.language = nil
-            options.detectLanguage = true
-        } else {
-            options.language = forcedLang
-            options.detectLanguage = (forcedLang == nil)
-        }
-        options.verbose = false
-        options.suppressBlank = true
-        // Thresholds tuned to suppress hallucinations on silence
-        options.noSpeechThreshold = 0.6
-        options.logProbThreshold = -1.0
-        options.compressionRatioThreshold = 2.4
-        // Speed flags — skip timestamp tokens (decode fewer tokens, also solves
-        // the <|0.00|> token leak we saw on multi-segment outputs) and disable
-        // temperature fallback retries. Our hallucination filter is the safety
-        // net for the edge cases fallback would normally catch.
-        options.withoutTimestamps = true
-        options.wordTimestamps = false
-        options.temperatureFallbackCount = 0
+        let options = WhisperService.decodingOptions(translate: translate, forcedLanguage: forcedLang)
 
         let modeLabel = translate ? "translate→en" : "transcribe"
         log("Whisper: \(modeLabel) (model: \(model), lang: \(forcedLang ?? "auto"))...")
@@ -112,21 +87,9 @@ class WhisperService {
             let detectedLang = result.language
             let elapsed = String(format: "%.1f", Date().timeIntervalSince(startTime))
 
-            // Filter segments: drop those with high noSpeechProb (hallucination on silence)
-            let filteredSegments = result.segments.filter { segment in
-                let dominated = segment.noSpeechProb > 0.6 && segment.avgLogprob < -0.7
-                if dominated {
-                    log("Whisper: dropping segment (noSpeech=\(String(format: "%.2f", segment.noSpeechProb)), avgLogP=\(String(format: "%.2f", segment.avgLogprob))): \"\(segment.text.prefix(60))\"")
-                }
-                return !dominated
-            }
-
-            var rawText = filteredSegments.map { $0.text }.joined(separator: " ")
-            if rawText.isEmpty && !result.text.isEmpty {
-                // Fallback: if all segments were filtered, use original (rare edge case)
-                rawText = result.text
-            }
-            log("Whisper: done in \(elapsed)s, detected=\(detectedLang), segments=\(result.segments.count)→\(filteredSegments.count), text=\(rawText.prefix(100))")
+            let spoken = WhisperService.spokenText(of: result)
+            var rawText = spoken.text
+            log("Whisper: done in \(elapsed)s, detected=\(detectedLang), segments=\(result.segments.count)→\(spoken.kept), text=\(rawText.prefix(100))")
 
             // Language verification + retry only makes sense in transcribe mode —
             // in translate mode the OUTPUT language is always English by design,
@@ -166,6 +129,100 @@ class WhisperService {
             log("Whisper: transcription failed: \(error)")
             return nil
         }
+    }
+
+    // MARK: - Shared between the final pass and the live preview
+
+    /// How every pass is decoded.
+    static func decodingOptions(translate: Bool, forcedLanguage: String?) -> DecodingOptions {
+        var options = DecodingOptions()
+        // In translate mode we let Whisper auto-detect the source language —
+        // forcing the source here also works, but auto is more robust when the
+        // user holds the translate hotkey and switches between Chinese / French
+        // / etc. without changing Settings.
+        if translate {
+            options.task = .translate
+            options.language = nil
+            options.detectLanguage = true
+        } else {
+            options.language = forcedLanguage
+            options.detectLanguage = (forcedLanguage == nil)
+        }
+        options.verbose = false
+        options.suppressBlank = true
+        // Thresholds tuned to suppress hallucinations on silence
+        options.noSpeechThreshold = 0.6
+        options.logProbThreshold = -1.0
+        options.compressionRatioThreshold = 2.4
+        // Speed flags — skip timestamp tokens (decode fewer tokens, also solves
+        // the <|0.00|> token leak we saw on multi-segment outputs) and disable
+        // temperature fallback retries. Our hallucination filter is the safety
+        // net for the edge cases fallback would normally catch.
+        options.withoutTimestamps = true
+        options.wordTimestamps = false
+        options.temperatureFallbackCount = 0
+        return options
+    }
+
+    /// A result's text without the segments Whisper itself thinks are
+    /// silence (hallucinated on it), and how many segments were kept.
+    static func spokenText(of result: TranscriptionResult, quiet: Bool = false) -> (text: String, kept: Int) {
+        let segments = result.segments.filter { segment in
+            let dominated = segment.noSpeechProb > 0.6 && segment.avgLogprob < -0.7
+            if dominated, !quiet {
+                log("Whisper: dropping segment (noSpeech=\(String(format: "%.2f", segment.noSpeechProb)), avgLogP=\(String(format: "%.2f", segment.avgLogprob))): \"\(segment.text.prefix(60))\"")
+            }
+            return !dominated
+        }
+        var text = segments.map { $0.text }.joined(separator: " ")
+        if text.isEmpty && !result.text.isEmpty {
+            // Fallback: if all segments were filtered, use original (rare edge case)
+            text = result.text
+        }
+        return (text, segments.count)
+    }
+
+    // MARK: - Live preview
+
+    /// What a recording still in progress says so far. `samples` are mono at
+    /// 16 kHz (see `resample`). The same decoding and clean-up as the final
+    /// pass, minus the second pass a language mismatch would cost: a preview
+    /// in an unexpected language is dropped instead, and the next one tried.
+    ///
+    /// Returns nil when there is nothing worth showing, when the model isn't
+    /// loaded (a preview never loads one), or when the calling task was
+    /// cancelled — which is how the final pass gets the model to itself.
+    func transcribePreview(samples: [Float], translate: Bool = false) async -> String? {
+        guard let kit = whisperKit, loadedModel == Settings.shared.whisperModel, !samples.isEmpty else { return nil }
+        let forcedLang = Settings.shared.whisperLanguageArg
+        let options = WhisperService.decodingOptions(translate: translate, forcedLanguage: forcedLang)
+        do {
+            let results: [TranscriptionResult] = try await kit.transcribe(audioArray: samples, decodeOptions: options)
+            guard !Task.isCancelled, let result = results.first else { return nil }
+            var text = cleanupTranscription(WhisperService.spokenText(of: result, quiet: true).text)
+            if !translate, forcedLang == nil, !Settings.shared.selectedLanguages.isEmpty,
+               !WhisperService.isLanguageExpected(text, selected: Settings.shared.selectedLanguages) {
+                return nil
+            }
+            text = HallucinationFilter.removeTrailing(from: text)
+            if !translate { text = convertChineseIfNeeded(text, quiet: true) }
+            return text.isEmpty ? nil : text
+        } catch {
+            if !(error is CancellationError) { log("Whisper: preview failed: \(error)") }
+            return nil
+        }
+    }
+
+    /// Mono samples at any rate → the 16 kHz Whisper takes.
+    static func resample(_ samples: [Float], from sampleRate: Double) -> [Float] {
+        guard sampleRate != 16000, sampleRate > 0, !samples.isEmpty else { return samples }
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
+              let channel = buffer.floatChannelData?[0] else { return [] }
+        samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: samples.count) }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        guard let resampled = AudioProcessor.resampleAudio(fromBuffer: buffer, toSampleRate: 16000, channelCount: 1) else { return [] }
+        return AudioProcessor.convertBufferToArray(buffer: resampled)
     }
 
     // MARK: - Model Loading
@@ -313,18 +370,18 @@ class WhisperService {
 
     // MARK: - Chinese Conversion
 
-    private func convertChineseIfNeeded(_ text: String) -> String {
+    private func convertChineseIfNeeded(_ text: String, quiet: Bool = false) -> String {
         if Settings.shared.chineseSimplified {
             let mutable = NSMutableString(string: text)
             CFStringTransform(mutable, nil, "Hant-Hans" as CFString, false)
             let converted = mutable as String
-            if converted != text { log("Whisper: converted traditional → simplified") }
+            if converted != text, !quiet { log("Whisper: converted traditional → simplified") }
             return converted
         } else if Settings.shared.chineseTraditional {
             let mutable = NSMutableString(string: text)
             CFStringTransform(mutable, nil, "Hans-Hant" as CFString, false)
             let converted = mutable as String
-            if converted != text { log("Whisper: converted simplified → traditional") }
+            if converted != text, !quiet { log("Whisper: converted simplified → traditional") }
             return converted
         }
         return text

@@ -70,6 +70,15 @@ VOICE_CASES = [
     # English speech while only Chinese + Japanese are selected: auto-detect
     # yields English, the language check must notice and retry exactly once.
     dict(id="unexpected-language-retries", lang="en", text=EN_YOU, languages=["zh-Hans", "ja"],   retry=True, any_text=True),
+
+    # ── Live dictation: long enough for several previews while "recording" ──
+    dict(id="live-en",            lang="en", live=True, contains=["second section", "client"],
+         text="I spent the morning reading the report, and I think the second section needs more data before we send it to the client."),
+    dict(id="live-zh-mixed",      lang="zh", live=True, contains=["开会", "release"],
+         text="今天下午我们开会讨论新版本的发布计划，会后我把 release notes 发到群里，大家有问题可以直接回复。"),
+    # Speech, then four seconds of room noise before the key is released:
+    # previews made during the pause must not grow a made-up ending.
+    dict(id="live-en-pause",      lang="en", live=True, text=EN_YOU, ends="to you", tail=4.0),
 ]
 # fmt: on
 
@@ -140,6 +149,7 @@ def seed_voice(out: Path) -> str:
             "mustNotEndWith": case.get("not_ends", []),
             "expectRetry": case.get("retry", False),
             "anyText": case.get("any_text", False),
+            "live": case.get("live", False),
             "audioSeconds": round(seconds, 2),
         })
 

@@ -187,9 +187,10 @@ private final class PickerPanel: NSPanel {
 
 /// Dark-themed button with SF Symbol + optional text label. `accent: true`
 /// fills with the app's blue; `destructive: true` tints the icon red.
-private final class PickerButton: NSView {
+/// Shared by the capture picker, the selection menu and the note panel.
+final class PickerButton: NSView {
     private let symbol: String
-    private let title: String?
+    private var title: String?
     private let accent: Bool
     private let destructive: Bool
     private var hovered = false
@@ -210,6 +211,18 @@ private final class PickerButton: NSView {
         updateBackground()
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Width that fits the icon, `title` and the button's padding.
+    static func width(for title: String) -> CGFloat {
+        let text = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)])
+        return ceil(text.width) + 16 + 6 + 28      // icon + gap + padding
+    }
+
+    func updateTitle(_ newTitle: String) { title = newTitle; needsDisplay = true }
+
+    /// These sit in panels that are not key (and in an app that is not
+    /// active): the first click must act, not just focus.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     private func addTrackingArea() {
         let area = NSTrackingArea(rect: .zero, options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
@@ -243,7 +256,11 @@ private final class PickerButton: NSView {
         let symbolColor: NSColor = destructive
             ? NSColor(red: 1.0, green: 0.42, blue: 0.42, alpha: 1.0)
             : .white
+        // The colour is part of the symbol itself, so it draws the same into
+        // any context — a tint painted over it afterwards only works when
+        // nothing has been drawn behind it yet.
         let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [symbolColor]))
         guard let baseImg = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) else { return }
         let img = baseImg.withSymbolConfiguration(config) ?? baseImg
 
@@ -265,9 +282,6 @@ private final class PickerButton: NSView {
             )
             img.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0,
                      respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
-            // Tint the symbol: re-draw with source-in to color it
-            symbolColor.set()
-            iconRect.fill(using: .sourceAtop)
 
             (title as NSString).draw(
                 at: NSPoint(x: startX + img.size.width + 6,
@@ -284,8 +298,6 @@ private final class PickerButton: NSView {
             )
             img.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0,
                      respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
-            symbolColor.set()
-            iconRect.fill(using: .sourceAtop)
         }
     }
 }

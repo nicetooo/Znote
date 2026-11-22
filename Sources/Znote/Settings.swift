@@ -147,6 +147,15 @@ class Settings {
         set { defaults.set(newValue, forKey: "whisperModel") }
     }
 
+    // MARK: - Live dictation
+
+    /// Write dictated text at the cursor while still speaking, correcting it
+    /// as the recognition changes. Off: it is written once, on release.
+    var liveDictation: Bool {
+        get { defaults.object(forKey: "liveDictation") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "liveDictation") }
+    }
+
     // MARK: - Audio Detection
 
     var silenceThreshold: Float {

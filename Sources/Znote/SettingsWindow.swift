@@ -556,6 +556,19 @@ class SettingsWindowController: NSObject, NSWindowDelegate {
         container.addSubview(loginHint)
         y += 26
 
+        let live = DarkToggle(title: L("settings.general.live_dictation"), isOn: Settings.shared.liveDictation)
+        live.frame = NSRect(x: 0, y: y, width: width, height: 32)
+        live.onToggle = { toggle in
+            Settings.shared.liveDictation = toggle.isOn
+            log("Settings: live dictation \(toggle.isOn ? "on" : "off")")
+        }
+        container.addSubview(live)
+        y += 36
+        let liveHint = makeSubLabel(L("settings.general.live_dictation.hint"))
+        liveHint.frame = NSRect(x: 0, y: y, width: width, height: 16)
+        container.addSubview(liveHint)
+        y += 26
+
         container.frame = NSRect(x: 0, y: 0, width: width, height: y)
 
         refreshModelList()

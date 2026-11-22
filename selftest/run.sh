@@ -46,7 +46,7 @@ export MODEL="${MODEL:-large-v3}"
 export LANGS="${LANGS:-zh-Hans,en}"
 TIMEOUT="${TIMEOUT:-600}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
-if (( $# > 0 )); then SCENARIOS=("$@"); else SCENARIOS=(logic history hotkeys clipboard editor voice); fi
+if (( $# > 0 )); then SCENARIOS=("$@"); else SCENARIOS=(logic history hotkeys clipboard editor notes voice); fi
 
 OUT="$PWD/build/selftest"
 MODEL_DIR="$HOME/Library/Application Support/Znote/Models/models/argmaxinc/whisperkit-coreml/openai_whisper-$MODEL"

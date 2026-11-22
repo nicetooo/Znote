@@ -16,10 +16,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var systemIntegration: SystemIntegration!
     private var recordingOverlay: RecordingOverlay!
     private var translationOverlay: TranslationOverlay!
+    private let selectionMenu = SelectionMenu()
+    private let noteInput = NoteInputPanel()
     private var settingsController: SettingsWindowController!
     private var historyController: HistoryWindowController!
     private var isRecording = false
     private var recordingMode: RecordingMode = .transcribe
+    /// The dictation being written as it is spoken, if this recording has one.
+    private var live: LiveSession?
+    /// Goes up with every recording, so a late answer about the previous
+    /// one's target can't start typing into this one.
+    private var recordingSerial = 0
     private var regionSelector: RegionSelector!
     private var captureActionPicker: CaptureActionPicker!
     private let screenshotEditor = ScreenshotEditor()
@@ -32,12 +39,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         log("applicationDidFinishLaunching")
         checkAccessibility()
+        EditMenu.install()
         setupMenuBar()
         log("Menu bar setup done")
         setupServices()
         log("Services ready")
         setupKeyMonitor()
-        log("Ready. Hold Right ⌘ to record, tap Right ⌥ to translate.")
+        log("Ready. Hold Right ⌘ to record, tap Right ⌥ for the selection menu.")
         preloadModel()
     }
 
@@ -266,8 +274,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         keyMonitor.onVoiceTranslateDown = { [weak self] in self?.startRecording(mode: .translate) }
         keyMonitor.onVoiceTranslateUp   = { [weak self] in self?.stopRecordingAndProcess() }
         keyMonitor.onToggleHistory      = { [weak self] in self?.toggleHistory() }
-        keyMonitor.onTranslate          = { [weak self] in self?.translateSelection() }
+        keyMonitor.onTranslate          = { [weak self] in self?.selectionHotkey() }
         keyMonitor.onScreenshot         = { [weak self] in self?.takeScreenshot() }
+        keyMonitor.onOtherKeyDown       = { [weak self] in self?.live?.typer.disturb() }
 
         keyMonitor.start()
     }
@@ -317,7 +326,92 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             self.audioRecorder.startRecording()
             log("Recording (mode: \(mode))...")
+            self.recordingSerial += 1
+            if Settings.shared.liveDictation { self.startLive(mode: mode) }
         }
+    }
+
+    // MARK: - Live dictation
+
+    /// A recording whose text is written while it is being spoken.
+    private final class LiveSession {
+        let typer: LiveTyper
+        let previews = LiveDictation()
+        /// The app being typed into; nil when it is Znote's own note panel.
+        let targetPID: pid_t?
+        var mouseMonitor: Any?
+
+        init(typer: LiveTyper, targetPID: pid_t?) {
+            self.typer = typer
+            self.targetPID = targetPID
+        }
+    }
+
+    /// Decide where this recording's text goes while it is spoken — the note
+    /// being written, or the app in front if its cursor is somewhere text
+    /// can safely be corrected — and start previewing.
+    private func startLive(mode: RecordingMode) {
+        if noteInput.hasKeyboard {
+            beginLive(LiveSession(typer: LiveTyper(sink: noteInput), targetPID: nil), mode: mode)
+            return
+        }
+        guard let front = NSWorkspace.shared.frontmostApplication else { return }
+        let pid = front.processIdentifier
+        let name = front.bundleIdentifier ?? "pid \(pid)"
+        let serial = recordingSerial
+        DispatchQueue.global(qos: .userInitiated).async {
+            let verdict = LiveTarget.check(pid: pid)
+            DispatchQueue.main.async {
+                guard self.isRecording, self.recordingSerial == serial, self.live == nil else { return }
+                log("Live: \(name) has the keyboard in \(verdict.role) — \(verdict.allowed ? "writing as it is spoken" : "writing once, on release")")
+                guard verdict.allowed else { return }
+                let session = LiveSession(typer: LiveTyper(sink: self.systemIntegration), targetPID: pid)
+                // A click may move the cursor: from then on nothing is taken back.
+                session.mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak session] _ in
+                    session?.typer.disturb()
+                }
+                self.beginLive(session, mode: mode)
+            }
+        }
+    }
+
+    private func beginLive(_ session: LiveSession, mode: RecordingMode) {
+        live = session
+        let recorder = audioRecorder!
+        session.previews.start(whisper: whisperService, translate: mode == .translate,
+                               threshold: Settings.shared.silenceThreshold,
+                               audio: { recorder.snapshot() },
+                               onText: { [weak session] text in session?.typer.update(to: text) })
+    }
+
+    /// The recording is over and `text` is what was said ("" for nothing):
+    /// turn what was written along the way into it.
+    private func finishLive(_ session: LiveSession, with text: String) {
+        let typer = session.typer
+        if session.targetPID == nil {
+            // The note panel. If it was closed meanwhile, the text goes to
+            // whatever has the keyboard now, as dictation normally does.
+            if noteInput.hasKeyboard {
+                typer.finish(with: text)
+            } else if !text.isEmpty {
+                systemIntegration.pasteText(text)
+            }
+        } else if NSWorkspace.shared.frontmostApplication?.processIdentifier == session.targetPID {
+            typer.finish(with: text)
+            systemIntegration.endLive()
+        } else {
+            // Another app is in front now: what was written stays where it
+            // is, and the whole text goes to the new cursor.
+            log("Live: the app in front changed — pasting the result where the cursor is now")
+            systemIntegration.endLive()
+            if !text.isEmpty { systemIntegration.pasteText(text) }
+        }
+        log("Live: \(session.previews.passes) previews, \(typer.updates) corrections written\(typer.disturbed ? ", stopped correcting part-way" : "")")
+    }
+
+    private func endLiveMonitoring(_ session: LiveSession?) {
+        if let monitor = session?.mouseMonitor { NSEvent.removeMonitor(monitor) }
+        session?.mouseMonitor = nil
     }
 
     private func stopRecordingAndProcess() {
@@ -327,12 +421,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.async {
             self.audioRecorder.stopRecording()
             self.recordingOverlay.hide()
+            let session = self.live
+            self.live = nil
+            self.endLiveMonitoring(session)
 
             // Check if recording had meaningful audio before wasting time on Whisper
             guard self.audioRecorder.hasMeaningfulAudio else {
                 log("Skipped transcription: too short or too quiet")
                 NSSound(named: "Frog")?.play()
                 self.updateState(.ready)
+                // Previews wait for the same loudness, so nothing should
+                // have been written — but if something was, take it back.
+                if let session {
+                    Task.detached {
+                        await session.previews.stop()
+                        await MainActor.run { self.finishLive(session, with: "") }
+                    }
+                }
                 return
             }
 
@@ -352,6 +457,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
 
             Task.detached {
+                // The preview in flight has to let go of the model first.
+                await session?.previews.stop()
                 // Wait for model to be ready (if preloading is still in progress)
                 while whisper.isLoading {
                     try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
@@ -366,9 +473,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let text = await whisper.transcribe(audioPath: audioPath, translate: mode == .translate)
                 await MainActor.run {
                     self.recordingOverlay.hide()
-                    if let text = text, !text.isEmpty {
+                    if let session {
+                        // Written as it was spoken: correct that into the
+                        // final text — or take it all back if there is none.
+                        self.finishLive(session, with: text ?? "")
+                        if let text, !text.isEmpty {
+                            log("Result: \(text)")
+                            HistoryStore.shared.addVoice(text: text, duration: duration)
+                        } else {
+                            log("No speech detected.")
+                        }
+                    } else if let text = text, !text.isEmpty {
                         log("Result: \(text)")
-                        integration.pasteText(text)
+                        if self.noteInput.hasKeyboard {
+                            // The cursor is in Znote's own note: write the
+                            // text there directly. A simulated ⌘V would go
+                            // through the clipboard for nothing.
+                            self.noteInput.insert(text)
+                            log("Result went into the note being written")
+                        } else {
+                            integration.pasteText(text)
+                        }
                         // Both modes write to the voice history. The translated
                         // English text is just another voice transcript from
                         // the user's perspective.
@@ -622,34 +747,69 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: - Translation
+    // MARK: - Selection: translate or note
 
-    private func translateSelection() {
+    /// The selection hotkey (Right ⌥ tap by default). Reads the selection and
+    /// where it was made, then offers Translate / Note beside the pointer.
+    /// Tapping again while the menu is up takes the default, Translate.
+    private func selectionHotkey() {
         DispatchQueue.main.async {
-            // If overlay is already showing, dismiss it (toggle behavior)
             if self.translationOverlay.isShowing {
-                self.translationOverlay.hide()
+                self.translationOverlay.hide()      // a tap dismisses a translation
                 return
             }
+            if self.selectionMenu.isShowing {
+                self.selectionMenu.chooseDefault()
+                return
+            }
+            if self.noteInput.isShowing { return }  // a note is being written
 
-            log("Translating selection...")
+            log("Selection hotkey...")
+            let pointer = NSEvent.mouseLocation
+            // Both answers come back on the main queue; the menu waits for both.
+            var selectedText: String?
+            var source: SelectionSource?
+            let pending = DispatchGroup()
 
+            // Note which app is in front now — before any of our panels show.
+            if let front = NSWorkspace.shared.frontmostApplication,
+               front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                pending.enter()
+                SelectionSourceReader.read(front) { source = $0; pending.leave() }
+            }
             // Copy the selection (asynchronous: it waits on the front app).
-            self.systemIntegration.getSelectedText { [weak self] selectedText in
-                self?.translate(selection: selectedText)
+            pending.enter()
+            self.systemIntegration.getSelectedText { selectedText = $0; pending.leave() }
+
+            pending.notify(queue: .main) { [weak self] in
+                guard let self else { return }
+                guard let selectedText else {
+                    log("No text selected.")
+                    return
+                }
+                log("Selected: \(selectedText)")
+                log("Selected in: \(source?.label ?? "unknown")")
+                self.selectionMenu.show(near: pointer, onChoose: { [weak self] choice in
+                    switch choice {
+                    case .translate: self?.translate(selectedText, source: source, near: pointer)
+                    case .note: self?.writeNote(about: selectedText, source: source, near: pointer)
+                    }
+                })
             }
         }
     }
 
-    private func translate(selection selectedText: String?) {
-        guard let selectedText else {
-            log("No text selected.")
-            return
-        }
-        log("Selected: \(selectedText)")
+    private func writeNote(about text: String, source: SelectionSource?, near pointer: NSPoint) {
+        noteInput.show(text: text, source: source, near: pointer, onSave: { note in
+            HistoryStore.shared.addNote(text: text, note: note, source: source)
+        }, onCancel: {
+            log("Note cancelled.")
+        })
+    }
 
+    private func translate(_ selectedText: String, source: SelectionSource?, near pointer: NSPoint) {
         // Show loading overlay immediately for instant feedback
-        translationOverlay.showLoading()
+        translationOverlay.showLoading(near: pointer)
         updateState(.processing)
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -660,7 +820,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.translationOverlay.showResult(result.text)
                     HistoryStore.shared.addTranslation(
                         input: selectedText, output: result.text,
-                        sourceLang: result.sourceLang, targetLang: result.targetLang
+                        sourceLang: result.sourceLang, targetLang: result.targetLang, source: source
                     )
                 } else {
                     log("Translation failed.")
@@ -669,6 +829,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.updateState(.ready)
             }
         }
+    }
+}
+
+// MARK: - Edit menu
+
+/// Znote has no menu bar, and ⌘V, ⌘C, ⌘X, ⌘A and ⌘Z are not handled by text
+/// fields themselves — an Edit menu answers them. So the app has one that is
+/// never shown: its key equivalents are all that is wanted of it, in the note
+/// panel, the History search field and the screenshot editor's text tool.
+enum EditMenu {
+    static func install() {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let main = NSMenu()
+        main.addItem(NSMenuItem())      // where the application menu goes
+        let item = NSMenuItem()
+        item.submenu = edit
+        main.addItem(item)
+        NSApp.mainMenu = main
     }
 }
 

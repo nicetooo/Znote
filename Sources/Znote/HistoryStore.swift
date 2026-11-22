@@ -13,6 +13,15 @@ struct HistoryRecord {
     let timestamp: Date
     let duration: Double?       // recording duration in seconds (for voice)
     let imagePath: String?      // absolute PNG path for screenshot type, nil otherwise
+    var note: String? = nil     // what the user wrote about the selection (note type)
+    /// Where the selection was made (notes and translations), nil if unknown.
+    var source: SelectionSource? = nil
+
+    /// What "go back to where this came from" would do, or nil.
+    var restoreAction: SourceRestorer.Action? {
+        guard let source else { return nil }
+        return SourceRestorer.action(for: source, text: type == .translation ? (inputText ?? outputText) : outputText)
+    }
 
     var displayText: String {
         switch type {
@@ -25,11 +34,22 @@ struct HistoryRecord {
             return L("history.row.screenshot_prefix", outputText)  // outputText holds filename
         case .recording:
             return L("history.row.recording_prefix", outputText)   // outputText holds filename
+        case .note:
+            // The user's own words first; the selection they are about, quoted.
+            let quote = "“\(outputText)”"
+            if let note, !note.isEmpty { return "\(note)\n\(quote)" }
+            return quote
         }
     }
 
     var copyText: String {
-        return outputText
+        guard type == .note else { return outputText }
+        // A note is copied whole: what was written, what it is about, where.
+        var parts: [String] = []
+        if let note, !note.isEmpty { parts.append(note) }
+        parts.append(outputText)
+        if let url = source?.webURL?.absoluteString ?? source?.fileURL?.path { parts.append(url) }
+        return parts.joined(separator: "\n")
     }
 }
 
@@ -38,6 +58,7 @@ enum HistoryType: String {
     case translation = "translation"
     case screenshot = "screenshot"
     case recording = "recording"
+    case note = "note"
 }
 
 enum HistoryTypeFilter: Int {
@@ -46,6 +67,7 @@ enum HistoryTypeFilter: Int {
     case translation = 2
     case screenshot = 3
     case recording = 4
+    case note = 5
 
     /// nil → show everything; otherwise restrict to this type.
     var historyType: HistoryType? {
@@ -55,6 +77,7 @@ enum HistoryTypeFilter: Int {
         case .translation: return .translation
         case .screenshot: return .screenshot
         case .recording: return .recording
+        case .note: return .note
         }
     }
 }
@@ -118,6 +141,10 @@ class HistoryStore {
         // Migration for DBs created before image_path column existed.
         // sqlite throws "duplicate column" if it already exists — we swallow that.
         sqlite3_exec(db, "ALTER TABLE history ADD COLUMN image_path TEXT", nil, nil, nil)
+        // Notes, and where a selection was made — same approach.
+        for column in ["note", "source_app", "source_bundle", "source_title", "source_url"] {
+            sqlite3_exec(db, "ALTER TABLE history ADD COLUMN \(column) TEXT", nil, nil, nil)
+        }
     }
 
     // MARK: - Insert
@@ -128,10 +155,21 @@ class HistoryStore {
         log("HistoryStore: saved voice record")
     }
 
-    func addTranslation(input: String, output: String, sourceLang: String?, targetLang: String?) {
+    func addTranslation(input: String, output: String, sourceLang: String?, targetLang: String?,
+                        source: SelectionSource? = nil) {
         insert(type: .translation, inputText: input, outputText: output,
-               sourceLang: sourceLang, targetLang: targetLang, duration: nil, imagePath: nil)
+               sourceLang: sourceLang, targetLang: targetLang, duration: nil, imagePath: nil, source: source)
         log("HistoryStore: saved translation record")
+    }
+
+    /// Save a note about a selection. `note` may be empty: the selection and
+    /// where it was made are worth keeping on their own.
+    func addNote(text: String, note: String, source: SelectionSource?) {
+        let written = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        insert(type: .note, inputText: nil, outputText: text,
+               sourceLang: nil, targetLang: nil, duration: nil, imagePath: nil,
+               note: written.isEmpty ? nil : written, source: source)
+        log("HistoryStore: saved note record")
     }
 
     /// Save a screenshot record. `path` is the absolute PNG path on disk.
@@ -156,10 +194,11 @@ class HistoryStore {
 
     private func insert(type: HistoryType, inputText: String?, outputText: String,
                         sourceLang: String?, targetLang: String?, duration: Double?,
-                        imagePath: String?) {
+                        imagePath: String?, note: String? = nil, source: SelectionSource? = nil) {
         let sql = """
-            INSERT INTO history (type, input_text, output_text, source_lang, target_lang, timestamp, duration, image_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO history (type, input_text, output_text, source_lang, target_lang, timestamp, duration, image_path,
+                                 note, source_app, source_bundle, source_title, source_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -180,6 +219,11 @@ class HistoryStore {
             sqlite3_bind_null(stmt, 7)
         }
         bindText(stmt, 8, imagePath)
+        bindText(stmt, 9, note)
+        bindText(stmt, 10, source?.appName)
+        bindText(stmt, 11, source?.bundleID)
+        bindText(stmt, 12, source?.windowTitle)
+        bindText(stmt, 13, source?.url)
 
         if sqlite3_step(stmt) != SQLITE_DONE {
             log("HistoryStore: insert step failed")
@@ -198,16 +242,20 @@ class HistoryStore {
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "%", with: "\\%")
                 .replacingOccurrences(of: "_", with: "\\_")
-            conditions.append("(output_text LIKE ? ESCAPE '\\' OR input_text LIKE ? ESCAPE '\\')")
-            textParams.append("%\(literal)%")
-            textParams.append("%\(literal)%")
+            // A note is found by what it says and by where it was taken.
+            let columns = ["output_text", "input_text", "note", "source_title", "source_url"]
+            conditions.append("(" + columns.map { "\($0) LIKE ? ESCAPE '\\'" }.joined(separator: " OR ") + ")")
+            textParams.append(contentsOf: Array(repeating: "%\(literal)%", count: columns.count))
         }
         if let type = typeFilter.historyType {
             conditions.append("type = ?")
             textParams.append(type.rawValue)
         }
 
-        var sql = "SELECT id, type, input_text, output_text, source_lang, target_lang, timestamp, duration, image_path FROM history"
+        var sql = """
+            SELECT id, type, input_text, output_text, source_lang, target_lang, timestamp, duration, image_path,
+                   note, source_app, source_bundle, source_title, source_url FROM history
+            """
         if !conditions.isEmpty {
             sql += " WHERE " + conditions.joined(separator: " AND ")
         }
@@ -239,11 +287,14 @@ class HistoryStore {
             let duration: Double? = sqlite3_column_type(stmt, 7) != SQLITE_NULL
                 ? sqlite3_column_double(stmt, 7) : nil
             let imagePath = columnText(stmt, 8)
+            let source = SelectionSource(appName: columnText(stmt, 10), bundleID: columnText(stmt, 11),
+                                         windowTitle: columnText(stmt, 12), url: columnText(stmt, 13))
 
             records.append(HistoryRecord(
                 id: id, type: type, inputText: inputText, outputText: outputText,
                 sourceLang: sourceLang, targetLang: targetLang,
-                timestamp: timestamp, duration: duration, imagePath: imagePath
+                timestamp: timestamp, duration: duration, imagePath: imagePath,
+                note: columnText(stmt, 9), source: source.isEmpty ? nil : source
             ))
         }
         return records

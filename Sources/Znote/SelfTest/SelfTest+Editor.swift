@@ -201,7 +201,7 @@ extension SelfTest {
 
     /// Send a mouse event to whatever view is under `point` (given in `view`'s
     /// coordinates), the way AppKit would deliver a real one.
-    private static func mouse(_ type: NSEvent.EventType, in view: NSView, at point: NSPoint) {
+    static func mouse(_ type: NSEvent.EventType, in view: NSView, at point: NSPoint) {
         guard let window = view.window, let event = NSEvent.mouseEvent(
             with: type, location: view.convert(point, to: nil), modifierFlags: [],
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
@@ -439,7 +439,7 @@ extension SelfTest {
     /// works for the self-drawn views here whether or not they are in a
     /// window. Layer-only styling (background colours, corner radii) is not
     /// captured.
-    private static func render(_ view: NSView) -> Data? {
+    static func render(_ view: NSView) -> Data? {
         let size = view.bounds.size
         guard size.width > 0, size.height > 0, let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: Int(size.width) * 2, pixelsHigh: Int(size.height) * 2,

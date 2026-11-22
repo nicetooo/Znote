@@ -1,4 +1,5 @@
 import Foundation
+import WhisperKit
 
 /// Scenario `voice` — the WAV files `seed.py` synthesized, through the real
 /// WhisperService (model load, decoding, hallucination filter, language
@@ -25,6 +26,8 @@ extension SelfTest {
         let expectRetry: Bool
         /// Skip the text assertions (used where only the retry matters).
         let anyText: Bool
+        /// Also played back in real time through the live-dictation loop.
+        let live: Bool
     }
 
     static func runVoice(_ request: Request, _ r: inout Report) async {
@@ -101,6 +104,69 @@ extension SelfTest {
             if retries > 0 { detail["retries"] = "\(retries)" }
             if !failed.isEmpty { detail["failed"] = failed.joined(separator: "; ") }
             r.step(c.id, ok: failed.isEmpty, ms: elapsed, detail)
+
+            if c.live { await runLive(c, final: text, whisper: whisper, &r) }
         }
+    }
+
+    /// The clip played back in real time — the loop sees only as much of it
+    /// as has "been recorded" — through the real preview path, into a
+    /// document that stands in for the app being typed into. Then the final
+    /// text, as on key release.
+    private static func runLive(_ c: VoiceCase, final: String, whisper: WhisperService, _ r: inout Report) async {
+        guard let all = try? AudioProcessor.loadAudioAsFloatArray(fromPath: c.audio), !all.isEmpty else {
+            r.step("\(c.id): live — audio loads", ok: false)
+            return
+        }
+        let seconds = Double(all.count) / 16000
+        let document = LiveDocument()
+        let typer = LiveTyper(sink: document)
+        /// (ms since the recording began, what the document said then)
+        var timeline: [(Int, String)] = []
+
+        let live = LiveDictation()
+        let began = Date()
+        live.start(whisper: whisper, translate: false, threshold: Settings.shared.silenceThreshold,
+                   audio: {
+                       let heard = min(all.count, Int(Date().timeIntervalSince(began) * 16000))
+                       return AudioRecorder.Snapshot(samples: Array(all[..<heard]), sampleRate: 16000, peak: 1)
+                   },
+                   onText: { text in
+                       typer.update(to: text)
+                       timeline.append((ms(since: began), document.text))
+                   })
+        try? await Task.sleep(nanoseconds: UInt64((seconds + 0.2) * 1_000_000_000))
+
+        // Key released: the loop must let go of the model, and stay quiet.
+        let stopping = Date()
+        await live.stop()
+        let stopMs = ms(since: stopping)
+        let (atStop, updatesAtStop) = await MainActor.run { (document.text, typer.updates) }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let quiet = await MainActor.run { typer.updates == updatesAtStop }
+
+        await MainActor.run { typer.finish(with: final) }
+        let (text, mismatches, edits) = await MainActor.run { (document.text, document.mismatches, document.edits) }
+        let deleted = edits.reduce(0) { $0 + $1.deleted.count }
+        let inserted = edits.reduce(0) { $0 + $1.inserted.count }
+        let lastFix = edits.last.map { "-\($0.deleted.count) +\($0.inserted.count)" } ?? "none"
+
+        var detail: [String: String] = [
+            "audioSeconds": String(format: "%.1f", seconds),
+            "previews": "\(live.passes)",
+            "firstTextMs": timeline.first.map { "\($0.0)" } ?? "never",
+            "stopMs": "\(stopMs)",
+            "charsDeleted": "\(deleted)", "charsInserted": "\(inserted)",
+            "finalCorrection": lastFix,
+            "atRelease": atStop,
+        ]
+        for (index, entry) in timeline.enumerated() { detail[String(format: "t%02d @%dms", index, entry.0)] = entry.1 }
+
+        r.step("\(c.id): live — text appears while still speaking", ok: !timeline.isEmpty && live.passes >= 2, detail)
+        r.step("\(c.id): live — every correction deleted exactly what had been written", ok: mismatches == 0,
+               ["edits": "\(edits.count)"])
+        r.step("\(c.id): live — nothing is written after the key is released", ok: quiet, ms: stopMs)
+        r.step("\(c.id): live — the document ends as the final text", ok: text == final && !final.isEmpty,
+               text == final ? [:] : ["document": text, "final": final])
     }
 }

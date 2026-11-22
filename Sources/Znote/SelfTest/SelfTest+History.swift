@@ -122,6 +122,27 @@ extension SelfTest {
             r.step("delete: rows to delete were found", ok: false)
         }
 
+        // 7b. Notes, and where a selection was made — columns this old
+        //     database didn't have until it was opened.
+        let page = SelectionSource(appName: "Google Chrome", bundleID: "com.google.Chrome",
+                                   windowTitle: "Probe page title", url: "https://example.com/docs/page")
+        store.addNote(text: "the selected words", note: "  why this matters  ", source: page)
+        newest = store.fetch().first
+        r.step("add: note", ok: newest?.type == .note && newest?.outputText == "the selected words"
+                && newest?.note == "why this matters" && newest?.source == page,
+               ["note": newest?.note ?? "nil", "source": newest?.source?.label ?? "nil"])
+        store.addNote(text: "bookmark only", note: "", source: nil)
+        newest = store.fetch().first
+        r.step("add: note with nothing written and no source", ok: newest?.type == .note && newest?.note == nil
+                && newest?.source == nil && newest?.restoreAction == nil)
+        store.addTranslation(input: "probe 原文二", output: "probe two", sourceLang: "zh", targetLang: "en", source: page)
+        r.expect("add: translation remembers where it was made", store.fetch().first?.source, page)
+        r.expect("filter: note", store.fetch(typeFilter: .note).count, 2)
+        r.expect("search: matches what the note says", store.fetch(query: "why this matters").first?.outputText, "the selected words")
+        r.expect("search: matches the source's window title", store.fetch(query: "Probe page title").count, 2)
+        r.expect("search: matches the source's address", store.fetch(query: "example.com/docs").count, 2)
+        r.step("old rows have no source", ok: store.fetch(typeFilter: .voice).allSatisfy { $0.source == nil && $0.note == nil })
+
         // 8. Clear all.
         t = Date()
         store.deleteAll()

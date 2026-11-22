@@ -8,19 +8,28 @@ import Foundation
 ///
 /// Everything here runs on the main queue without blocking it: the waits
 /// between key events are scheduled, not slept.
-class SystemIntegration {
+class SystemIntegration: LiveTextSink {
     private let pasteboard: NSPasteboard
     /// Presses (true) or releases (false) a key with ⌘ held.
     private let postCommandKey: (CGKeyCode, Bool) -> Void
+    /// Presses or releases a key with nothing held.
+    private let postPlainKey: (CGKeyCode, Bool) -> Void
 
     private static let keyC: CGKeyCode = 0x08
     private static let keyV: CGKeyCode = 0x09
+    static let keyBackspace: CGKeyCode = 0x33
+
+    /// Carried by every key event Znote posts (`eventSourceUserData`), so
+    /// its own key monitor can tell them from the user's: "ZNOTE".
+    static let syntheticEventTag: Int64 = 0x5A4E_4F54_45
 
     /// The defaults are the real clipboard and real key events. The self-test
     /// substitutes a private pasteboard and a stand-in for the front app.
-    init(pasteboard: NSPasteboard = .general, postCommandKey: ((CGKeyCode, Bool) -> Void)? = nil) {
+    init(pasteboard: NSPasteboard = .general, postCommandKey: ((CGKeyCode, Bool) -> Void)? = nil,
+         postPlainKey: ((CGKeyCode, Bool) -> Void)? = nil) {
         self.pasteboard = pasteboard
-        self.postCommandKey = postCommandKey ?? SystemIntegration.postRealKey
+        self.postCommandKey = postCommandKey ?? { SystemIntegration.keyEvent($0, down: $1, command: true)?.post(tap: .cgAnnotatedSessionEventTap) }
+        self.postPlainKey = postPlainKey ?? { SystemIntegration.keyEvent($0, down: $1, command: false)?.post(tap: .cgAnnotatedSessionEventTap) }
     }
 
     // MARK: - Clipboard snapshot
@@ -100,16 +109,130 @@ class SystemIntegration {
         }
     }
 
+    // MARK: - Live dictation
+
+    /// Marks what is on the clipboard as passing through, so clipboard
+    /// managers don't keep every fragment (nspasteboard.org).
+    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    /// Backspaces are posted this many at a time, a tick apart.
+    private static let backspaceBurst = 16
+
+    private var liveEdits: [LiveEdit] = []
+    private var liveBusy = false
+    private var liveEnding = false
+    /// The clipboard as it was before the first fragment went onto it, and
+    /// the change count our last write left it at.
+    private var liveSaved: Snapshot?
+    private var liveChangeCount = 0
+
+    /// Whether every edit handed to `apply` has been carried out.
+    var liveIdle: Bool { !liveBusy && liveEdits.isEmpty }
+
+    /// Correct the text written at the front app's cursor: backspaces for
+    /// what goes, a paste for what comes. Edits are carried out one after
+    /// another, however fast they arrive.
+    ///
+    /// The clipboard is borrowed once for the whole dictation — from the
+    /// first paste until `endLive()` — not once per edit.
+    func apply(_ edit: LiveEdit) {
+        guard !edit.isEmpty else { return }
+        liveEdits.append(edit)
+        liveEnding = false
+        pumpLive()
+    }
+
+    /// The dictation is over: give the clipboard back once the last edit has
+    /// been carried out and the app has read it.
+    func endLive() {
+        liveEnding = true
+        pumpLive()
+    }
+
+    private func pumpLive() {
+        guard !liveBusy else { return }
+        guard !liveEdits.isEmpty else {
+            if liveEnding { finishLive() }
+            return
+        }
+        liveBusy = true
+        let edit = liveEdits.removeFirst()
+        backspace(edit.deleted.count) {
+            guard !edit.inserted.isEmpty else {
+                self.liveBusy = false
+                self.pumpLive()
+                return
+            }
+            // Something else was copied since our last fragment (or this is
+            // the first one): that is what has to come back at the end.
+            if self.liveSaved == nil || self.pasteboard.changeCount != self.liveChangeCount {
+                self.liveSaved = self.snapshot()
+            }
+            self.pasteboard.clearContents()
+            self.pasteboard.setString(edit.inserted, forType: .string)
+            self.pasteboard.setString("", forType: SystemIntegration.transientType)
+            self.liveChangeCount = self.pasteboard.changeCount
+            self.after(0.05) {
+                self.postCommandKey(SystemIntegration.keyV, true)
+                self.after(0.03) {
+                    self.postCommandKey(SystemIntegration.keyV, false)
+                    // Leave the fragment there until the app has read it.
+                    self.after(0.12) {
+                        self.liveBusy = false
+                        self.pumpLive()
+                    }
+                }
+            }
+        }
+    }
+
+    private func backspace(_ count: Int, then done: @escaping () -> Void) {
+        guard count > 0 else { return done() }
+        let burst = min(count, SystemIntegration.backspaceBurst)
+        for _ in 0..<burst {
+            postPlainKey(SystemIntegration.keyBackspace, true)
+            postPlainKey(SystemIntegration.keyBackspace, false)
+        }
+        after(0.012) { self.backspace(count - burst, then: done) }
+    }
+
+    private func finishLive() {
+        liveEnding = false
+        guard let saved = liveSaved else { return }
+        liveSaved = nil
+        let count = liveChangeCount
+        after(0.5) {
+            // Unless a new dictation has borrowed it again, or something
+            // else was copied meanwhile — which we must not overwrite.
+            guard self.liveSaved == nil, self.liveIdle else {
+                if self.liveSaved != nil, self.pasteboard.changeCount == count { self.liveSaved = saved }
+                return
+            }
+            if self.pasteboard.changeCount == count { self.restore(saved) }
+        }
+    }
+
     // MARK: - Helpers
 
     private func after(_ seconds: TimeInterval, _ work: @escaping () -> Void) {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
-    private static func postRealKey(_ keyCode: CGKeyCode, _ down: Bool) {
+    /// A key event that carries exactly the modifiers given here, whatever
+    /// keys are physically down: live dictation types while the hotkey — a
+    /// ⌘ key, by default — is still held, and a backspace that picked that up
+    /// would delete to the start of the line. So the flags are always set,
+    /// to nothing if need be, never left as the event was created.
+    static func keyEvent(_ keyCode: CGKeyCode, down: Bool, command: Bool) -> CGEvent? {
         let source = CGEventSource(stateID: .hidSystemState)
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down) else { return }
-        event.flags = .maskCommand
-        event.post(tap: .cgAnnotatedSessionEventTap)
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down) else { return nil }
+        stamp(event, command: command)
+        return event
+    }
+
+    /// Replace whatever modifiers `event` was created with — the ones held
+    /// on the keyboard at that moment — and mark it as Znote's own.
+    static func stamp(_ event: CGEvent, command: Bool) {
+        event.flags = command ? .maskCommand : []
+        event.setIntegerValueField(.eventSourceUserData, value: syntheticEventTag)
     }
 }
