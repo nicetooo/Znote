@@ -16,6 +16,14 @@ class RecordingOverlay {
         showOverlay(mode: .recording(hint: hint))
     }
 
+    /// The recording is over and being transcribed: the bars stop following
+    /// the microphone and roll as a wave until `hide()`.
+    func showProcessing() {
+        audioLevel = 0
+        showOverlay(mode: .recording(hint: nil))
+        waveformView?.processing = true
+    }
+
     /// Show a text message (e.g. "Loading model...") instead of waveform
     func showMessage(_ text: String) {
         showOverlay(mode: .message(text))
@@ -33,7 +41,9 @@ class RecordingOverlay {
             case .recording(let hint):
                 messageLabel?.isHidden = true
                 waveformView?.isHidden = false
+                waveformView?.processing = false
                 applyHint(hint)
+                stopAnimation()
                 startAnimation()
             case .message(let text):
                 stopAnimation()
@@ -217,6 +227,10 @@ class RecordingOverlay {
 /// Custom view that draws animated sound wave bars with a dark theme.
 class WaveformView: NSView {
     var audioLevel: Float = 0.0
+    /// Transcribing, not listening: a wave rolls along the bars.
+    var processing = false
+    /// Where the wave is, in radians. Advanced once per frame drawn.
+    var phase: CGFloat = 0
 
     private let barCount = 32
     private let barSpacing: CGFloat = 1.5
@@ -257,6 +271,17 @@ class WaveformView: NSView {
 
             targetHeights[i] = baseHeight + (maxBarHeight * level * waveShape * randomVariation)
         }
+        if processing {
+            // Two waves of different length travelling at different speeds,
+            // so the motion doesn't visibly repeat.
+            phase += 0.16
+            for i in 0..<barCount {
+                let x = CGFloat(i)
+                let centerDistance = abs(x - CGFloat(barCount) / 2.0) / (CGFloat(barCount) / 2.0)
+                let wave = 0.5 + 0.34 * sin(x * 0.42 - phase) + 0.16 * sin(x * 0.19 + phase * 0.6)
+                targetHeights[i] = 3.0 + maxBarHeight * 0.62 * wave * (1.0 - centerDistance * 0.55)
+            }
+        }
 
         // Smooth animation
         for i in 0..<barCount {
@@ -272,8 +297,10 @@ class WaveformView: NSView {
             let rect = NSRect(x: x, y: y, width: barWidth, height: height)
             let path = NSBezierPath(roundedRect: rect, xRadius: barWidth / 2, yRadius: barWidth / 2)
 
-            // Grey to white — subtle, premium feel
-            let white: CGFloat = 0.35 + (level * 0.55)
+            // Grey to white — subtle, premium feel. While processing, each
+            // bar is as bright as it is tall, so the crest reads as light
+            // moving along.
+            let white: CGFloat = processing ? 0.38 + 0.52 * min(height / maxBarHeight, 1) : 0.35 + (level * 0.55)
             let color = NSColor(white: white, alpha: 0.9)
             context.setFillColor(color.cgColor)
             path.fill()

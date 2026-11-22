@@ -55,6 +55,59 @@ enum LiveText {
         character.isPunctuation || character.isWhitespace
     }
 
+    /// A preview without its last word (its last two characters, in a script
+    /// written without spaces). The end of a preview is the word the
+    /// recording was cut in the middle of, and the one most often changed by
+    /// the next pass — so where nothing written can be taken back, it waits.
+    static func withoutLastWord(_ text: String) -> String {
+        guard let last = text.unicodeScalars.last else { return text }
+        let spaceless = (0x2E80...0x9FFF).contains(last.value) || (0xAC00...0xD7AF).contains(last.value)
+            || (0xF900...0xFAFF).contains(last.value) || (0x20000...0x2FFFF).contains(last.value)
+        if spaceless { return interim(String(text.dropLast(2))) }
+        guard let space = text.lastIndex(where: { $0.isWhitespace }) else { return "" }
+        return interim(String(text[..<space]))
+    }
+
+    /// The part of `preview` that comes after what is already written, for
+    /// where nothing written can be taken back. The two need not agree
+    /// word for word: a later pass often changes a word or two of what an
+    /// earlier one heard, and that must not stop the text from growing —
+    /// the changed words are put right with the final text. `written` is
+    /// lined up against the start of `preview` (edit distance) and whatever
+    /// follows the best match is the continuation. nil when they are too
+    /// different to line up at all.
+    static func continuation(written: String, preview: String) -> String? {
+        let w = Array(written.lowercased()), p = Array(preview), pl = Array(preview.lowercased())
+        guard !w.isEmpty else { return preview }
+        guard pl.count == p.count else { return nil }      // a character whose lowercase is longer: don't guess
+        // row[j] = edits to turn the written text into the first j characters of the preview.
+        var row = Array(0...p.count)
+        for i in 1...w.count {
+            var previous = row
+            swap(&previous, &row)
+            row[0] = i
+            for j in stride(from: 1, through: p.count, by: 1) {
+                let change = previous[j - 1] + (w[i - 1] == pl[j - 1] ? 0 : 1)
+                row[j] = min(change, previous[j] + 1, row[j - 1] + 1)
+            }
+        }
+        var best = 0
+        for j in 0...p.count where row[j] < row[best] || (row[j] == row[best] && abs(j - w.count) < abs(best - w.count)) {
+            best = j
+        }
+        // Generous: holding a preview back stops the text growing for the
+        // rest of the dictation, which is worse than a few wrong characters
+        // the final text will put right anyway.
+        guard row[best] <= max(4, w.count / 2) else { return nil }
+        return String(p[best...])
+    }
+
+    /// Whether two previews say the same thing, formatting aside.
+    static func sameWords(_ a: String, _ b: String) -> Bool {
+        func words(_ text: String) -> String { String(text.lowercased().filter { !isFormatting($0) }) }
+        return words(a) == words(b)
+    }
+
     /// A preview as it should be written. Whisper closes whatever it has
     /// heard so far with a full stop, which the next pass takes back when the
     /// sentence turns out to go on — so previews are written without their
@@ -79,8 +132,27 @@ final class LiveTyper {
     /// more is taken back: the rest is only ever added.
     private(set) var disturbed = false
     private(set) var updates = 0
+    /// Previews that would have meant taking something back, and so were
+    /// not written (see `correctsWhileSpeaking`).
+    private(set) var held = 0
+    private var lastPreview = ""
 
-    init(sink: LiveTextSink) { self.sink = sink }
+    /// Whether previews may take back what is written. True only where
+    /// writing involves no key events (Znote's own note panel).
+    ///
+    /// In another app a correction is a backspace, and previews arrive while
+    /// the hotkey — a ⌘ key, by default — is physically held: whatever flags
+    /// the event carries, the app sees ⌘⌫ and deletes to the start of the
+    /// line. So there, while speaking, text is only ever added — what a
+    /// preview says beyond what is written, even if it now hears some of
+    /// the written words differently — and the one correction comes with
+    /// the final text, after the key is up.
+    private let correctsWhileSpeaking: Bool
+
+    init(sink: LiveTextSink, correctsWhileSpeaking: Bool) {
+        self.sink = sink
+        self.correctsWhileSpeaking = correctsWhileSpeaking
+    }
 
     func disturb() {
         if !disturbed { log("Live: the user stepped in — nothing more will be taken back") }
@@ -91,7 +163,19 @@ final class LiveTyper {
     /// corrected, and corrections are no longer possible.
     func update(to text: String) {
         guard !disturbed else { return }
-        write(LiveText.settled(written: written, preview: text))
+        if correctsWhileSpeaking {
+            write(LiveText.settled(written: written, preview: text))
+            return
+        }
+        // The last word waits for the next pass to confirm it — unless this
+        // pass already says what the one before did (the speaker paused).
+        let steady = LiveText.sameWords(text, lastPreview) ? text : LiveText.withoutLastWord(text)
+        lastPreview = text
+        guard let rest = LiveText.continuation(written: written, preview: steady) else {
+            held += 1
+            return
+        }
+        if !rest.isEmpty { write(written + rest) }
     }
 
     /// The final text. Normally what was written is corrected into it; once

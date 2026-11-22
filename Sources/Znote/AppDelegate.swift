@@ -352,7 +352,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// can safely be corrected — and start previewing.
     private func startLive(mode: RecordingMode) {
         if noteInput.hasKeyboard {
-            beginLive(LiveSession(typer: LiveTyper(sink: noteInput), targetPID: nil), mode: mode)
+            beginLive(LiveSession(typer: LiveTyper(sink: noteInput, correctsWhileSpeaking: true), targetPID: nil), mode: mode)
             return
         }
         guard let front = NSWorkspace.shared.frontmostApplication else { return }
@@ -365,7 +365,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard self.isRecording, self.recordingSerial == serial, self.live == nil else { return }
                 log("Live: \(name) has the keyboard in \(verdict.role) — \(verdict.allowed ? "writing as it is spoken" : "writing once, on release")")
                 guard verdict.allowed else { return }
-                let session = LiveSession(typer: LiveTyper(sink: self.systemIntegration), targetPID: pid)
+                let session = LiveSession(typer: LiveTyper(sink: self.systemIntegration, correctsWhileSpeaking: false), targetPID: pid)
                 // A click may move the cursor: from then on nothing is taken back.
                 session.mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak session] _ in
                     session?.typer.disturb()
@@ -397,6 +397,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 systemIntegration.pasteText(text)
             }
         } else if NSWorkspace.shared.frontmostApplication?.processIdentifier == session.targetPID {
+            // The correction is backspaces, and a backspace typed while ⌘, ⌥
+            // or ⌃ is down deletes a line or a word. If a key is down right
+            // now — the next recording has begun, or anything else — only
+            // add what is missing.
+            let down = CGEventSource.flagsState(.hidSystemState).intersection([.maskCommand, .maskAlternate, .maskControl])
+            if isRecording || !down.isEmpty {
+                log("Live: a modifier key is down — adding the rest without correcting")
+                typer.disturb()
+            }
             typer.finish(with: text)
             systemIntegration.endLive()
         } else {
@@ -406,7 +415,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             systemIntegration.endLive()
             if !text.isEmpty { systemIntegration.pasteText(text) }
         }
-        log("Live: \(session.previews.passes) previews, \(typer.updates) corrections written\(typer.disturbed ? ", stopped correcting part-way" : "")")
+        log("Live: \(session.previews.passes) previews, \(typer.updates) writes, \(typer.held) previews held back\(typer.disturbed ? ", stopped correcting part-way" : "")")
     }
 
     private func endLiveMonitoring(_ session: LiveSession?) {
@@ -420,13 +429,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         isRecording = false
         DispatchQueue.main.async {
             self.audioRecorder.stopRecording()
-            self.recordingOverlay.hide()
             let session = self.live
             self.live = nil
             self.endLiveMonitoring(session)
 
             // Check if recording had meaningful audio before wasting time on Whisper
             guard self.audioRecorder.hasMeaningfulAudio else {
+                self.recordingOverlay.hide()
                 log("Skipped transcription: too short or too quiet")
                 NSSound(named: "Frog")?.play()
                 self.updateState(.ready)
@@ -443,6 +452,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             NSSound(named: "Pop")?.play()
             self.updateState(.processing)
+            // Stay on screen until the text is written: a preview on screen
+            // is not the result yet, and nothing else says so.
+            self.recordingOverlay.showProcessing()
             log("\(mode == .translate ? "Translating" : "Transcribing")...")
 
             let audioPath = self.audioRecorder.outputPath
@@ -472,7 +484,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
                 let text = await whisper.transcribe(audioPath: audioPath, translate: mode == .translate)
                 await MainActor.run {
-                    self.recordingOverlay.hide()
+                    // Unless the next recording has already taken it over.
+                    if !self.isRecording { self.recordingOverlay.hide() }
                     if let session {
                         // Written as it was spoken: correct that into the
                         // final text — or take it all back if there is none.

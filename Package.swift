@@ -5,7 +5,7 @@ let package = Package(
     name: "Znote",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
+        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "1.1.1"),
     ],
     targets: [
         .target(
@@ -19,7 +19,7 @@ let package = Package(
             name: "Znote",
             dependencies: [
                 "CSQLite",
-                .product(name: "WhisperKit", package: "WhisperKit"),
+                .product(name: "WhisperKit", package: "argmax-oss-swift"),
             ],
             path: "Sources/Znote",
             // sign.sh assembles the .app bundle manually (Info.plist, .icns,

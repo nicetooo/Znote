@@ -107,6 +107,19 @@ extension SelfTest {
 
             if c.live { await runLive(c, final: text, whisper: whisper, &r) }
         }
+
+        // A recording of one's own, for looking into a report (informational;
+        // the text goes into the report, which stays on this Mac).
+        if let extra = ProcessInfo.processInfo.environment["ZNOTE_VOICE_EXTRA"], !extra.isEmpty {
+            Settings.shared.selectedLanguages = manifest.languages
+            for run in 1...3 {
+                t = Date()
+                let text = await whisper.transcribe(audioPath: extra) ?? ""
+                let marks = text.filter { $0.isPunctuation }.count
+                r.step("extra recording, run \(run) (informational)", ok: true, ms: ms(since: t),
+                       ["characters": "\(text.count)", "punctuation marks": "\(marks)", "text": text])
+            }
+        }
     }
 
     /// The clip played back in real time — the loop sees only as much of it
@@ -120,7 +133,8 @@ extension SelfTest {
         }
         let seconds = Double(all.count) / 16000
         let document = LiveDocument()
-        let typer = LiveTyper(sink: document)
+        // As in another app: nothing may be taken back while "the key is held".
+        let typer = LiveTyper(sink: document, correctsWhileSpeaking: false)
         /// (ms since the recording began, what the document said then)
         var timeline: [(Int, String)] = []
 
@@ -142,6 +156,7 @@ extension SelfTest {
         await live.stop()
         let stopMs = ms(since: stopping)
         let (atStop, updatesAtStop) = await MainActor.run { (document.text, typer.updates) }
+        let deletedWhileSpeaking = await MainActor.run { document.edits.reduce(0) { $0 + $1.deleted.count } }
         try? await Task.sleep(nanoseconds: 400_000_000)
         let quiet = await MainActor.run { typer.updates == updatesAtStop }
 
@@ -156,13 +171,15 @@ extension SelfTest {
             "previews": "\(live.passes)",
             "firstTextMs": timeline.first.map { "\($0.0)" } ?? "never",
             "stopMs": "\(stopMs)",
-            "charsDeleted": "\(deleted)", "charsInserted": "\(inserted)",
+            "charsDeleted": "\(deleted)", "charsInserted": "\(inserted)", "previewsHeld": "\(typer.held)",
             "finalCorrection": lastFix,
             "atRelease": atStop,
         ]
         for (index, entry) in timeline.enumerated() { detail[String(format: "t%02d @%dms", index, entry.0)] = entry.1 }
 
         r.step("\(c.id): live — text appears while still speaking", ok: !timeline.isEmpty && live.passes >= 2, detail)
+        r.step("\(c.id): live — nothing is taken back while still speaking (no backspace with the hotkey down)",
+               ok: deletedWhileSpeaking == 0, ["deleted": "\(deletedWhileSpeaking)"])
         r.step("\(c.id): live — every correction deleted exactly what had been written", ok: mismatches == 0,
                ["edits": "\(edits.count)"])
         r.step("\(c.id): live — nothing is written after the key is released", ok: quiet, ms: stopMs)

@@ -162,7 +162,7 @@ extension SelfTest {
             r.expect("live preview \"\(preview)\" over \"\(written)\"", LiveText.settled(written: written, preview: preview), want)
         }
         let commaDocument = LiveDocument()
-        let softTyper = LiveTyper(sink: commaDocument)
+        let softTyper = LiveTyper(sink: commaDocument, correctsWhileSpeaking: true)
         softTyper.update(to: "发布计划,会后我把")
         softTyper.update(to: "发布计划会后我把Release Notes")
         softTyper.update(to: "发布计划,会后我把release notes发到群里")
@@ -172,9 +172,60 @@ extension SelfTest {
         softTyper.finish(with: "发布计划，会后我把 release notes 发到群里。")
         r.expect("live typer: the final text is still written exactly", commaDocument.text, "发布计划，会后我把 release notes 发到群里。")
 
+        // In another app nothing is taken back while speaking: backspaces
+        // would arrive with the hotkey still held.
+        for (text, want) in [
+            ("I think the second sentence", "I think the second"),
+            ("今天下午我们开会讨论", "今天下午我们开会"),
+            ("会后我把 release", "会后我把"),
+            ("hello", ""),
+            ("发布，", ""),
+        ] {
+            r.expect("live preview \"\(text)\" without its last word", LiveText.withoutLastWord(text), want)
+        }
+        let cautious = LiveDocument()
+        let cautiousTyper = LiveTyper(sink: cautious, correctsWhileSpeaking: false)
+        cautiousTyper.update(to: "I think the second sentence")
+        r.expect("append-only typer: the last word waits", cautious.text, "I think the second")
+        cautiousTyper.update(to: "I think the second section needs more detail")
+        r.expect("append-only typer: …and is written once the next pass has settled it", cautious.text, "I think the second section needs more")
+        cautiousTyper.update(to: "I think the second section needs more data before")
+        cautiousTyper.update(to: "I think the second section needs more data before")
+        r.expect("append-only typer: a repeated preview (a pause) is written to its end", cautious.text,
+                 "I think the second section needs more data before")
+        cautiousTyper.update(to: "I think the second section needed more data before we send it")
+        r.expect("append-only typer: a preview that changes a written word still adds what follows", cautious.text,
+                 "I think the second section needs more data before we send")
+        cautiousTyper.update(to: "完全不一样的一句话，跟前面没有关系")
+        r.step("append-only typer: a preview that can't be lined up with what is written is held",
+               ok: cautious.text == "I think the second section needs more data before we send" && cautiousTyper.held == 1)
+        r.step("append-only typer: nothing was deleted while speaking", ok: cautious.edits.allSatisfy { $0.deleted.isEmpty },
+               ["edits": "\(cautious.edits.count)"])
+
+        // (written, preview, what follows)
+        let continuations: [(String, String, String?)] = [
+            ("", "今天下午", "今天下午"),
+            ("今天下午我们开回", "今天下午我们开会讨论新版本", "讨论新版本"),                 // one character heard differently
+            ("今天下午我们开会", "今天下午，我们开会讨论", "讨论"),                          // a comma appeared
+            ("我想说的是这个功能", "我想说的是，这个功能其实还可以", "其实还可以"),
+            ("现在这个边写边输出", "现在这个编写编输出好像我遇到一次", "好像我遇到一次"),      // two characters differ
+            ("I spent the morning", "I spent the morning reading the", " reading the"),
+            ("I spent the Morning", "I spent the morning reading", " reading"),
+            ("hello world", "今天下午我们开会讨论", nil),
+            ("今天下午我们开会讨论", "今天下午", nil),                                      // the preview says much less: held
+            ("今天下午我们开会讨论", "今天下午我们开会讨", ""),                              // …or a little less: nothing to add
+        ]
+        for (written, preview, want) in continuations {
+            r.expect("live continuation of \"\(written)\" in \"\(preview)\"",
+                     LiveText.continuation(written: written, preview: preview), want)
+        }
+        cautiousTyper.finish(with: "I think the second section needed more data before we send it.")
+        r.expect("append-only typer: the final text corrects it, once the key is up", cautious.text,
+                 "I think the second section needed more data before we send it.")
+
         // Previews, then the final text: the document follows each one.
         let document = LiveDocument()
-        let typer = LiveTyper(sink: document)
+        let typer = LiveTyper(sink: document, correctsWhileSpeaking: true)
         var followed = true
         for preview in ["I will", "I will send the fire", "I will send the file to", "I will send the file to you"] {
             typer.update(to: preview)
@@ -189,14 +240,14 @@ extension SelfTest {
 
         // Nothing was said after all (the final pass found only silence).
         let silent = LiveDocument()
-        let silentTyper = LiveTyper(sink: silent)
+        let silentTyper = LiveTyper(sink: silent, correctsWhileSpeaking: true)
         silentTyper.update(to: "Thank you")
         silentTyper.finish(with: "")
         r.expect("live typer: an empty result takes back what was written", silent.text, "")
 
         // The user clicked or typed part-way: nothing more is deleted.
         let touched = LiveDocument()
-        let touchedTyper = LiveTyper(sink: touched)
+        let touchedTyper = LiveTyper(sink: touched, correctsWhileSpeaking: true)
         touchedTyper.update(to: "send the fire")
         touchedTyper.disturb()
         touchedTyper.update(to: "send the file to")

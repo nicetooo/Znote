@@ -15,6 +15,38 @@ extension SelfTest {
         runNotePanel(request, &r)
         runNotesInHistory(request, &r)
         writeLinkSamples(request, &r)
+        runProcessingWave(request, &r)
+    }
+
+    /// The recording overlay's bars while a recording is being transcribed:
+    /// three moments of the wave, one above the other, in `processing-wave.png`.
+    private static func runProcessingWave(_ request: Request, _ r: inout Report) {
+        let size = NSSize(width: 280, height: 56)
+        let sheet = NSView(frame: NSRect(x: 0, y: 0, width: size.width, height: size.height * 3))
+        sheet.wantsLayer = true
+        sheet.layer?.backgroundColor = NSColor(white: 0.10, alpha: 1).cgColor
+        let window = NSWindow(contentRect: NSRect(origin: offscreen, size: sheet.frame.size), styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.contentView = sheet
+        var moved = true
+        var tallest: [Int] = []
+        for row in 0..<3 {
+            let wave = WaveformView(frame: NSRect(x: 0, y: CGFloat(row) * size.height, width: size.width, height: size.height))
+            wave.processing = true
+            wave.phase = CGFloat(row) * 2.0
+            sheet.addSubview(wave)
+            // Let the bars ease into the wave, as they do over the first frames on screen.
+            var first: Data?
+            for frame in 0..<30 {
+                let data = snapshot(wave)
+                if frame == 20 { first = data }
+                if frame == 29 { moved = moved && data != nil && data != first }
+            }
+            tallest.append(row)
+        }
+        let written = (snapshot(sheet).map { (try? $0.write(to: request.dir.appendingPathComponent("processing-wave.png"))) != nil }) ?? false
+        r.step("overlay: while transcribing the bars keep moving (processing-wave.png)", ok: moved && written,
+               ["rows": "\(tallest.count)"])
     }
 
     // MARK: - Notes in the History panel
@@ -363,7 +395,7 @@ extension SelfTest {
         // Live dictation: the note is corrected in place as previews change.
         panel.textView?.string = ""
         type("记一下：")
-        let liveTyper = LiveTyper(sink: panel)
+        let liveTyper = LiveTyper(sink: panel, correctsWhileSpeaking: true)
         liveTyper.update(to: "这个方法可以")
         liveTyper.update(to: "这个方案可以先在 staging")
         r.expect("note panel: a live preview is corrected in place", panel.textView?.string, "记一下：这个方案可以先在 staging")

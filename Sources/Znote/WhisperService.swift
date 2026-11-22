@@ -309,8 +309,7 @@ class WhisperService {
         return ModelComputeOptions(
             melCompute: .cpuAndGPU,  // mel is small; GPU is fine
             audioEncoderCompute: unit,
-            textDecoderCompute: unit,
-            prefillCompute: unit
+            textDecoderCompute: unit
         )
     }
 

@@ -157,7 +157,7 @@ extension SelfTest {
         // Previews one after another, as the live loop delivers them.
         await reset()
         var png = putImage()
-        let typer = await MainActor.run { LiveTyper(sink: system) }
+        let typer = await MainActor.run { LiveTyper(sink: system, correctsWhileSpeaking: true) }
         await MainActor.run { typer.update(to: "今天下午开回") }
         await settle()
         r.expect("live: the first preview is pasted", front.document, "今天下午开回")
@@ -181,7 +181,7 @@ extension SelfTest {
 
         // Faster than they can be carried out: still in order.
         await reset()
-        let burst = await MainActor.run { LiveTyper(sink: system) }
+        let burst = await MainActor.run { LiveTyper(sink: system, correctsWhileSpeaking: true) }
         await MainActor.run {
             burst.update(to: "one two three")
             burst.update(to: "one two tree house")
@@ -194,7 +194,7 @@ extension SelfTest {
         // A long take-back is spread over several bursts and still complete.
         await reset()
         let long = String(repeating: "很长的一句话", count: 12)       // 72 characters
-        let retract = await MainActor.run { LiveTyper(sink: system) }
+        let retract = await MainActor.run { LiveTyper(sink: system, correctsWhileSpeaking: true) }
         await MainActor.run { retract.update(to: long) }
         await settle()
         await MainActor.run {
@@ -208,7 +208,7 @@ extension SelfTest {
         // The user copies something while the dictation is going on.
         await reset()
         png = putImage()
-        let copying = await MainActor.run { LiveTyper(sink: system) }
+        let copying = await MainActor.run { LiveTyper(sink: system, correctsWhileSpeaking: true) }
         await MainActor.run { copying.update(to: "first part") }
         await settle()
         board.clearContents()
@@ -226,7 +226,7 @@ extension SelfTest {
         // …or right after it, before the clipboard is given back.
         await reset()
         _ = putImage()
-        let late = await MainActor.run { LiveTyper(sink: system) }
+        let late = await MainActor.run { LiveTyper(sink: system, correctsWhileSpeaking: true) }
         await MainActor.run {
             late.finish(with: "all at once")
             system.endLive()
